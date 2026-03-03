@@ -278,7 +278,6 @@ const App = () => {
 
   return (
     <div className="min-h-screen bg-[#070b1a] text-slate-200 font-sans pb-24 md:pb-0 selection:bg-yellow-500/30">
-      {/* 隱藏外框影響的 Meta Tags 優化 (透過程式碼暗示) */}
       <nav className="bg-[#0e1630] border-b border-slate-800 p-3 md:p-4 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-2">
           <div className="w-8 h-8 bg-yellow-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(234,179,8,0.2)]">
@@ -307,7 +306,7 @@ const App = () => {
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8 space-y-6">
               <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3 py-2 sticky top-[62px] z-40 bg-[#070b1a]/95 backdrop-blur-md border-b border-slate-800/50">
-               {['全部', '冷飲', '熱飲', '餐點', '其他'].map(cat => (
+                {['全部', '冷飲', '熱飲', '餐點', '其他'].map(cat => (
                   <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-xl text-[11px] font-black border transition-all whitespace-nowrap ${activeCategory === cat ? 'bg-yellow-500 border-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'bg-[#0e1630] border-slate-800 text-slate-400'}`}>
                     {cat}
                   </button>
@@ -357,13 +356,12 @@ const App = () => {
                   <div className="flex justify-between items-end">
                     <span className="text-xs text-slate-500 font-bold uppercase tracking-tighter">總額</span>
                     <span className="text-4xl font-black text-white tracking-tighter">${cartTotal}</span>
-                    </div>
+                  </div>
                   <button onClick={checkout} disabled={currentSale.length===0} className="w-full py-4 rounded-2xl bg-yellow-500 text-black font-black hover:bg-yellow-400 disabled:bg-slate-800 disabled:text-slate-500 transition-all flex justify-center items-center gap-2 shadow-lg shadow-yellow-500/10">確認結帳</button>
                 </div>
               </div>
             </div>
 
-            {/* 手機版浮動購物籃按鈕 - 核心修復點 */}
             <div className="lg:hidden fixed bottom-8 right-6 z-[60]">
               <button 
                 onClick={() => setShowMobileCart(true)}
@@ -380,7 +378,6 @@ const App = () => {
               </button>
             </div>
 
-            {/* 手機版全螢幕訂單彈窗 */}
             {showMobileCart && (
               <div className="fixed inset-0 bg-[#070b1a] z-[100] lg:hidden flex flex-col animate-in slide-in-from-bottom duration-300">
                 <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-[#0e1630]">
@@ -413,7 +410,7 @@ const App = () => {
                     value={dailyNote} 
                     onChange={e => setDailyNote(e.target.value)} 
                     placeholder="輸入訂單備註..." 
-              className="w-full bg-[#070b1a] border border-slate-800 rounded-2xl p-4 text-sm text-slate-200 h-24 outline-none focus:border-yellow-500/50" 
+                    className="w-full bg-[#070b1a] border border-slate-800 rounded-2xl p-4 text-sm text-slate-200 h-24 outline-none focus:border-yellow-500/50" 
                   />
                   <div className="flex justify-between items-center px-2">
                     <span className="text-xs text-slate-500 font-black uppercase tracking-widest">總金額</span>
@@ -457,7 +454,7 @@ const App = () => {
                       <input className="flex-1 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white focus:outline-none focus:border-yellow-500 min-w-[120px]" value={editBuffer.name} onChange={e=>setEditBuffer({...editBuffer, name: e.target.value})} />
                       <input className="w-24 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white" type="number" value={editBuffer.price} onChange={e=>setEditBuffer({...editBuffer, price: e.target.value})} />
                       <div className="flex items-center gap-1 ml-auto shrink-0">
-                                  <button onClick={() => handleEditSave(p.id)} className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg"><Check size={18}/></button>
+                        <button onClick={() => handleEditSave(p.id)} className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg"><Check size={18}/></button>
                         <button onClick={() => setEditingProductId(null)} className="p-2 bg-slate-800 text-slate-400 rounded-lg"><X size={18}/></button>
                       </div>
                     </div>
@@ -491,68 +488,33 @@ const App = () => {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-2">
               <h2 className="text-2xl font-black text-white italic tracking-tight">銷售大數據中心</h2>
               <button onClick={() => { if (groupedSales.length > 0) downloadCSV(groupedSales, `若晞完整報表.csv`); }} className="w-full sm:w-auto bg-[#0e1630] text-emerald-500 border border-emerald-500/20 px-5 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs hover:bg-emerald-500 hover:text-white transition-all">
-                                <FileSpreadsheet size={16} /> 匯出全部資料
+                <FileSpreadsheet size={16} /> 匯出全部資料
               </button>
             </div>
 
-            {groupedSales.map(day => (
-              <div key={day.date} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-xl mb-12">
-                <div className="bg-[#121c3b] p-6 flex flex-wrap justify-between items-center border-b border-slate-800 gap-4">
-                  <div className="flex items-center gap-3">
-                    <Calendar className="text-yellow-500" size={24} />
-                    <span className="text-xl font-black text-white">{day.date}</span>
-                    <button onClick={() => downloadCSV([day], `日報表_${day.date}.csv`)} className="ml-2 p-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
-                      <Download size={14} /> 匯出日報
-                    </button>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest">當日營業額</div>
-                    <div className="text-2xl font-black text-yellow-500 tracking-tighter">${day.total}</div>
-                  </div>
-                </div>
-
-                <div className="p-6 bg-[#070b1a]/30">
-                  <h3 className="text-[10px] font-black text-slate-500 mb-4 flex items-center gap-2 uppercase tracking-widest"><BarChart3 size={14} className="text-emerald-500" /> 品項匯總</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {Object.entries(day.summary).map(([name, data]) => (
-                      <div key={name} className="bg-[#0e1630] border border-slate-800/50 p-4 rounded-2xl flex justify-between items-center shadow-sm">
-                        <div>
-                          <div className="text-sm font-bold text-slate-200">{name}</div>
-                          <div className="text-[10px] text-slate-500 tracking-tight">${data.price} / 單位</div>
-                        </div>
-                        <div className="text-right">
-                          <div className="text-sm font-black text-white">× {data.count}</div>
-                          <div className="text-xs font-bold text-emerald-500">${data.subtotal}</div>
-                        </div>
+            <div className="grid grid-cols-1 gap-4">
+              {groupedSales.length > 0 ? (
+                groupedSales.map((day) => (
+                  <div key={day.date} className="bg-[#0e1630] rounded-[24px] shadow-sm border border-slate-800 p-6 flex items-center justify-between">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-slate-800 flex items-center justify-center rounded-2xl">
+                        <BarChart3 className="text-slate-400" size={24} />
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="border-t border-slate-800/50">
-                  <div className="px-6 py-3 border-b border-slate-800/20 flex items-center gap-2 text-[10px] font-black text-slate-600 uppercase tracking-widest"><List size={14} /> 流水帳明細</div>
-                  <div className="divide-y divide-slate-800/20">
-                    {day.records.map(record => (
-                      <div key={record.id} className="px-6 py-4 flex justify-between items-start hover:bg-slate-800/10 transition-colors">
-                        <div className="space-y-2 flex-1">
-                          <div className="text-[10px] font-black text-slate-600 tracking-widest">{record.time}</div>
-                          <div className="text-xs font-medium text-slate-400 flex flex-wrap gap-1.5">
-                            {record.items.map((it, i) => (
-                              <span key={i} className="bg-slate-900/80 px-2 py-0.5 rounded text-[10px] border border-slate-800/50">{it.name} <span className="text-slate-600">×</span> {it.quantity}</span>
-                            ))}
-                          </div>
-                          {record.note && <div className="text-sm text-yellow-500/80 bg-yellow-500/5 px-3 py-2 rounded-xl mt-2 border border-yellow-500/10 italic">註: {record.note}</div>}
-                        </div>
-                        <div className="flex flex-col items-end gap-2 ml-4 shrink-0">
-                          <span className="font-black text-slate-200 text-sm tracking-tight">${record.total}</span>
-                          <button onClick={() => requestDeleteRecord(record.id)} className="text-slate-800 hover:text-red-500 p-1.5 transition-colors bg-slate-900/50 rounded-lg"><Trash2 size={14} /></button>
-                        </div>
+                      <div>
+                        <h4 className="font-bold text-white">{day.date}</h4>
+                        <p className="text-sm text-slate-400">{day.records.length} 筆訂單</p>
                       </div>
-                    ))}
+                    </div>
+                    <div className="text-right">
+                      <p className="text-xl font-bold text-yellow-500">${day.total.toLocaleString()}</p>
+                      <button onClick={() => downloadCSV([day], `${day.date}-日報表.csv`)} className="mt-2 text-sm text-emerald-500 hover:text-emerald-400 flex items-center justify-end gap-1"><Download size={14} /> 匯出</button>
+                    </div>
                   </div>
-                </div>
-              </div>
-            ))}
+                ))
+              ) : (
+                <div className="text-center text-slate-500 mt-20">目前還沒有銷售紀錄。</div>
+              )}
+            </div>
           </div>
         )}
       </main>
@@ -570,7 +532,6 @@ const App = () => {
         </div>
       )}
       
-      {/* 注入自定義樣式以減少外部視覺干擾 */}
       <style>{`
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
@@ -581,7 +542,6 @@ const App = () => {
           padding: 0; 
           overscroll-behavior-y: contain; 
         }
-        /* 針對 Web App 優化 */
         @media all and (display-mode: standalone) {
           nav { padding-top: env(safe-area-inset-top); }
           .pb-24 { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
