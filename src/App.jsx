@@ -10,7 +10,6 @@ import {
 } from 'lucide-react';
 
 // --- Firebase 配置 ---
-// 使用環境變數來讀取設定，這樣才安全
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -24,15 +23,14 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-
-// appId 直接使用你的專案名稱字串即可
 const appId = 'sales-manager-pro-v2'; 
 
 const App = () => {
-  // ... 後面的程式碼保持不變
-
-const App = () => {
   const [user, setUser] = useState(null);
+  const [view, setView] = useState('sales'); 
+  const [activeCategory, setActiveCategory] = useState('全部');
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
   const [view, setView] = useState('sales'); 
   const [activeCategory, setActiveCategory] = useState('全部');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
