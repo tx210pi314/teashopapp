@@ -1,0 +1,32 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer utilities {
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .custom-scrollbar::-webkit-scrollbar {
+    width: 4px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: #1e293b;
+    border-radius: 10px;
+  }
+}
+
+body {
+  background-color: #070b1a;
+  margin: 0;
+  padding: 0;
+  overscroll-behavior-y: contain;
+}
+
+@media all and (display-mode: standalone) {
+  nav { padding-top: env(safe-area-inset-top); }
+  .pb-24 { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
+}
