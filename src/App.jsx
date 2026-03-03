@@ -1,15 +1,31 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
-import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { 
+  getAuth, 
+  signInAnonymously, 
+  onAuthStateChanged, 
+  signInWithCustomToken 
+} from 'firebase/auth';
+import { 
+  getFirestore, 
+  collection, 
+  doc, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc,
+  serverTimestamp 
+} from 'firebase/firestore';
 import { 
   Plus, Trash2, ShoppingCart, Settings, 
   ClipboardList, Calendar, FileSpreadsheet, X, Edit3, Check,
   ChevronUp, ChevronDown, Wifi, WifiOff, Loader2,
-  BarChart3, List, Download, ShoppingBag
+  BarChart3, List, Search, ChevronLeft, ChevronRight,
+  MoreHorizontal, CreditCard, Banknote, ArrowRightLeft, Clock,
+  LayoutGrid, Layers, Palette, Download
 } from 'lucide-react';
 
-// --- Firebase 配置 (改為讀取環境變數) ---
+// --- Firebase 配置 ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -18,11 +34,23 @@ const firebaseConfig = {
   messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
-
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'sales-manager-pro-v2';
+const appId = 'sales-manager-pro-v2'; // 直接寫死即可
+
+// 分頁配置：每頁顯示的天數
+const ITEMS_PER_PAGE = 5;
+
+// 安全生成 UUID
+const generateUUID = () => {
+  try {
+    if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+  } catch(e) {}
+  return 'id-' + Date.now().toString(36) + '-' + Math.random().toString(36).substring(2);
+};
 
 const App = () => {
   const [user, setUser] = useState(null);
@@ -33,15 +61,23 @@ const App = () => {
   // 數據狀態
   const [dbProducts, setDbProducts] = useState([]);
   const [salesHistory, setSalesHistory] = useState([]);
+  const [dbPaymentMethods, setDbPaymentMethods] = useState([]); 
   const [currentSale, setCurrentSale] = useState([]);
   const [dailyNote, setDailyNote] = useState("");
+  const [selectedPayment, setSelectedPayment] = useState("現金"); 
   const [newItem, setNewItem] = useState({ name: '', price: '', category: '冷飲' });
+  const [newPaymentName, setNewPaymentName] = useState(""); 
+  const [newPaymentColor, setNewPaymentColor] = useState("yellow"); 
   
-  // 離線同步與手機版狀態
+  // 離線同步相關狀態 (加入防護)
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [syncQueue, setSyncQueue] = useState(() => {
-    const saved = localStorage.getItem(`syncQueue_${appId}`);
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = window.localStorage.getItem(`syncQueue_${appId}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch (e) {
+      return [];
+    }
   }); 
 
   // 編輯與顯示狀態
@@ -49,49 +85,39 @@ const App = () => {
   const [editBuffer, setEditBuffer] = useState({ name: '', price: 0 });
   const [isSaving, setIsSaving] = useState(false);
   const [localHiddenIds, setLocalHiddenIds] = useState([]); 
+  const [undoItem, setUndoItem] = useState(null); 
   const [productToDelete, setProductToDelete] = useState(null);
+  const [highlightedTraceId, setHighlightedTraceId] = useState(null); 
+  
+  // 搜尋功能與分頁狀態
+  const [searchQuery, setSearchQuery] = useState("");
+  const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedDateJump, setSelectedDateJump] = useState(""); 
+  const [isSummarizedView, setIsSummarizedView] = useState(false); 
+  const [exportMonth, setExportMonth] = useState(() => {
+    try { return new Date().toISOString().slice(0, 7); } catch(e) { return "2024-01"; }
+  }); 
+  
+  const undoTimerRef = useRef(null);
   const isSyncingRef = useRef(false);
 
-  // --- 核心同步邏輯 ---
-  const processSyncQueue = async () => {
-    if (!navigator.onLine || isSyncingRef.current || !auth.currentUser) return;
-    const currentQueue = JSON.parse(localStorage.getItem(`syncQueue_${appId}`) || "[]");
-    if (currentQueue.length === 0) {
-      setIsSaving(false);
-      return;
-    }
-    isSyncingRef.current = true;
-    setIsSaving(true);
-    try {
-      while (currentQueue.length > 0) {
-        const item = currentQueue[0];
-        const docToUpload = { ...item, createdAt: serverTimestamp(), syncedAt: Date.now() };
-        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), docToUpload);
-        currentQueue.shift();
-        localStorage.setItem(`syncQueue_${appId}`, JSON.stringify(currentQueue));
-        setSyncQueue([...currentQueue]);
-      }
-    } catch (err) {
-      console.error("同步過程中發生錯誤:", err);
-    } finally {
-      setIsSaving(false);
-      isSyncingRef.current = false;
-    }
-  };
+  const colorOptions = [
+    { name: '黃色', value: 'yellow' },
+    { name: '綠色', value: 'emerald' },
+    { name: '藍色', value: 'blue' },
+    { name: '紫色', value: 'purple' },
+    { name: '粉色', value: 'rose' },
+    { name: '青色', value: 'cyan' }
+  ];
 
-  useEffect(() => {
-    const handleOnline = () => { setIsOnline(true); setTimeout(processSyncQueue, 1000); };
-    const handleOffline = () => setIsOnline(false);
-    window.addEventListener('online', handleOnline);
-    window.addEventListener('offline', handleOffline);
-    if (user && syncQueue.length > 0) processSyncQueue();
-    return () => {
-      window.removeEventListener('online', handleOnline);
-      window.removeEventListener('offline', handleOffline);
-    };
-  }, [user]);
+  // --- 1. 預設資料宣告 ---
+  const defaultPaymentMethods = useMemo(() => [
+    { name: '現金', color: 'yellow' },
+    { name: 'Line Pay', color: 'emerald' },
+    { name: '轉帳', color: 'blue' }
+  ], []);
 
-  // 預設品項
   const defaultProducts = useMemo(() => [
     { id: 'def_c1', name: '紫翳光', price: 220, category: '冷飲', isDefault: true, sortOrder: 10 },
     { id: 'def_c2', name: '十方仙境', price: 220, category: '冷飲', isDefault: true, sortOrder: 20 },
@@ -108,184 +134,412 @@ const App = () => {
     { id: 'def_f2', name: '琥珀糖外帶禮盒(六入)', price: 150, category: '餐點', isDefault: true, sortOrder: 130 },
     { id: 'def_f3', name: '水信玄餅(含冰茶)', price: 160, category: '餐點', isDefault: true, sortOrder: 140 },
     { id: 'def_f4', name: '迎春套組', price: 450, category: '餐點', isDefault: true, sortOrder: 150 },
-    { id: 'def_o1', name: '其他收入 1元', price: 1, category: '其他', isDefault: true, sortOrder: 1000 },
+    
+    // 其他類別項目 (收入)
+    { id: 'def_o1', name: '其他收入 1元', price: 1, category: '其他', isDefault: true, sortOrder: 1001 },
+    { id: 'def_o5', name: '其他收入 5元', price: 5, category: '其他', isDefault: true, sortOrder: 1005 },
     { id: 'def_o2', name: '其他收入 10元', price: 10, category: '其他', isDefault: true, sortOrder: 1010 },
-    { id: 'def_o3', name: '其他收入 100元', price: 100, category: '其他', isDefault: true, sortOrder: 1020 },
-    { id: 'def_o4', name: '其他收入 1000元', price: 1000, category: '其他', isDefault: true, sortOrder: 1030 },
-    { id: 'def_ex1', name: '臨時支出 -1元', price: -1, category: '其他', isDefault: true, sortOrder: 2000 },
+    { id: 'def_o6', name: '其他收入 50元', price: 50, category: '其他', isDefault: true, sortOrder: 1050 },
+    { id: 'def_o3', name: '其他收入 100元', price: 100, category: '其他', isDefault: true, sortOrder: 1100 },
+    { id: 'def_o7', name: '其他收入 500元', price: 500, category: '其他', isDefault: true, sortOrder: 1500 },
+    { id: 'def_o4', name: '其他收入 1000元', price: 1000, category: '其他', isDefault: true, sortOrder: 1900 },
+    { id: 'def_o8', name: '其他收入 5000元', price: 5000, category: '其他', isDefault: true, sortOrder: 1999 },
+    
+    // 其他類別項目 (支出)
+    { id: 'def_ex1', name: '臨時支出 -1元', price: -1, category: '其他', isDefault: true, sortOrder: 2001 },
+    { id: 'def_ex5', name: '臨時支出 -5元', price: -5, category: '其他', isDefault: true, sortOrder: 2005 },
     { id: 'def_ex2', name: '臨時支出 -10元', price: -10, category: '其他', isDefault: true, sortOrder: 2010 },
-    { id: 'def_ex3', name: '臨時支出 -100元', price: -100, category: '其他', isDefault: true, sortOrder: 2020 },
-    { id: 'def_ex4', name: '臨時支出 -1000元', price: -1000, category: '其他', isDefault: true, sortOrder: 2030 },
+    { id: 'def_ex6', name: '臨時支出 -50元', price: -50, category: '其他', isDefault: true, sortOrder: 2050 },
+    { id: 'def_ex3', name: '臨時支出 -100元', price: -100, category: '其他', isDefault: true, sortOrder: 2100 },
+    { id: 'def_ex7', name: '臨時支出 -500元', price: -500, category: '其他', isDefault: true, sortOrder: 2500 },
+    { id: 'def_ex4', name: '臨時支出 -1000元', price: -1000, category: '其他', isDefault: true, sortOrder: 2900 },
+    { id: 'def_ex8', name: '臨時支出 -5000元', price: -5000, category: '其他', isDefault: true, sortOrder: 2999 },
   ], []);
 
-  // --- 認證與監聽 ---
+  // --- 2. 核心邏輯與同步 ---
+  useEffect(() => {
+    let viewportMeta = document.querySelector('meta[name="viewport"]');
+    if (!viewportMeta) {
+      viewportMeta = document.createElement('meta');
+      viewportMeta.name = "viewport";
+      document.head.appendChild(viewportMeta);
+    }
+    viewportMeta.content = "width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover";
+    const preventPinch = (e) => { if (e.touches.length > 1) e.preventDefault(); };
+    document.addEventListener('touchstart', preventPinch, { passive: false });
+    return () => document.removeEventListener('touchstart', preventPinch);
+  }, []);
+
+  const processSyncQueue = async () => {
+    if (!navigator.onLine || isSyncingRef.current || !auth.currentUser) return;
+    let currentQueue = [];
+    try {
+      currentQueue = JSON.parse(window.localStorage.getItem(`syncQueue_${appId}`) || "[]");
+    } catch(e) { return; }
+    
+    if (currentQueue.length === 0) { setIsSaving(false); return; }
+    isSyncingRef.current = true;
+    setIsSaving(true);
+    try {
+      while (currentQueue.length > 0) {
+        const item = currentQueue[0];
+        const docToUpload = { ...item, createdAt: serverTimestamp(), syncedAt: serverTimestamp() };
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), docToUpload);
+        currentQueue.shift();
+        try { window.localStorage.setItem(`syncQueue_${appId}`, JSON.stringify(currentQueue)); } catch(e){}
+        setSyncQueue([...currentQueue]);
+      }
+    } catch (err) { console.error("同步失敗:", err); } finally { setIsSaving(false); isSyncingRef.current = false; }
+  };
+
+  useEffect(() => {
+    const handleOnline = () => { setIsOnline(true); setTimeout(processSyncQueue, 1000); };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline); window.addEventListener('offline', handleOffline);
+    return () => { window.removeEventListener('online', handleOnline); window.removeEventListener('offline', handleOffline); };
+  }, []);
+
   useEffect(() => {
     const initAuth = async () => {
-      try {
-        await signInAnonymously(auth);
-      } catch (error) {
-        console.error("Firebase 匿名登入失敗，請確認是否已在 Firebase Console 開啟此功能:", error);
-      }
-    };
+  try {
+    await signInAnonymously(auth);
+  } catch(e) { console.error("Firebase 登入失敗:", e); }
+};
+
     initAuth();
-    const unsubscribe = onAuthStateChanged(auth, setUser);
+    const unsubscribe = onAuthStateChanged(auth, (user) => { setUser(user); if (user) processSyncQueue(); });
     return () => unsubscribe();
   }, []);
 
   useEffect(() => {
     if (!user) return;
-    const unsubProducts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (s) => 
-      setDbProducts(s.docs.map(d => ({ ...d.data(), id: d.id })))
-    );
-    const unsubSales = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), (s) => 
-      setSalesHistory(s.docs.map(d => ({ ...d.data(), id: d.id })))
-    );
-    return () => { unsubProducts(); unsubSales(); };
+    const unsubProducts = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'products'), (s) => setDbProducts(s.docs.map(d => ({ ...d.data(), id: d.id }))));
+    const unsubSales = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'sales'), (s) => setSalesHistory(s.docs.map(d => ({ ...d.data(), id: d.id }))));
+    const unsubPayments = onSnapshot(collection(db, 'artifacts', appId, 'public', 'data', 'paymentMethods'), (s) => setDbPaymentMethods(s.docs.map(d => ({ ...d.data(), id: d.id }))));
+    return () => { unsubProducts(); unsubSales(); unsubPayments(); };
   }, [user]);
 
+  // --- 3. 數據過濾與整理 ---
+  const allPaymentMethods = useMemo(() => {
+    const combined = [...defaultPaymentMethods];
+    (dbPaymentMethods || []).forEach(dbM => {
+      if (!combined.some(m => m.name === dbM.name)) {
+        combined.push({ name: dbM.name, color: dbM.color || 'yellow' });
+      }
+    });
+    return combined;
+  }, [dbPaymentMethods, defaultPaymentMethods]);
+
   const allProducts = useMemo(() => {
-    const hiddenNames = new Set(dbProducts.filter(p => p.isHidden || p.isDeleted).map(p => p.originalName || p.name));
-    let result = defaultProducts.filter(p => !hiddenNames.has(p.name));
-    const activeDbEntries = dbProducts.filter(p => !p.isHidden && !p.isDeleted);
-    activeDbEntries.forEach(dbP => {
+    const hiddenNames = new Set((dbProducts || []).filter(p => p && (p.isHidden || p.isDeleted)).map(p => p.originalName || p.name));
+    let result = (defaultProducts || []).filter(p => p && !hiddenNames.has(p.name));
+    (dbProducts || []).filter(p => p && !p.isHidden && !p.isDeleted).forEach(dbP => {
       if (dbP.originalName) {
         const idx = result.findIndex(p => p.isDefault && p.name === dbP.originalName);
         if (idx !== -1) result[idx] = { ...result[idx], ...dbP, isDefault: false };
-      } else {
-        if (!result.some(p => p.name === dbP.name)) result.push({ ...dbP, isDefault: false });
-      }
+      } else if (!result.some(p => p.name === dbP.name)) result.push({ ...dbP, isDefault: false });
     });
     return result.sort((a, b) => (a.sortOrder ?? 9999) - (b.sortOrder ?? 9999));
   }, [dbProducts, defaultProducts]);
 
-  const checkout = () => {
-    if (currentSale.length === 0) return;
-    const now = new Date();
-    // 修正 toLocaleDateString 為 'zh-TW'，確保 Vercel 伺服器輸出的時間格式與本地一致
-    const orderData = {
-      fullDate: now.toLocaleDateString('zh-TW'),
-      time: now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
-      timestamp: Date.now(),
-      traceId: crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).substring(2)),
-      items: currentSale.map(i => ({ name: i.name, price: i.price, quantity: i.quantity })),
-      total: currentSale.reduce((s, i) => s + (i.price * i.quantity), 0),
-      note: dailyNote,
-      isHidden: false
+  const groupedSales = useMemo(() => {
+    const groups = {};
+    const activeSales = (salesHistory || []).filter(s => s && !s.isHidden && !(localHiddenIds || []).includes(s.id));
+    activeSales.forEach(record => {
+      try {
+        const date = record.fullDate || "未知日期";
+        if (!groups[date]) { groups[date] = { date, total: 0, records: [], paymentGroups: {} }; }
+        const safeTotal = typeof record.total === 'number' ? record.total : 0;
+        groups[date].records.push({ ...record, total: safeTotal, time: record.time || "--:--" });
+        groups[date].total += safeTotal;
+        const payMethod = record.paymentMethod || "現金";
+        if (!groups[date].paymentGroups[payMethod]) { groups[date].paymentGroups[payMethod] = { total: 0, items: {}, txns: [] }; }
+        groups[date].paymentGroups[payMethod].total += safeTotal;
+        groups[date].paymentGroups[payMethod].txns.push(record);
+        
+        (record.items || []).forEach(item => {
+          if (!item) return;
+          if (!groups[date].paymentGroups[payMethod].items[item.name]) { groups[date].paymentGroups[payMethod].items[item.name] = { count: 0, subtotal: 0, price: item.price || 0 }; }
+          groups[date].paymentGroups[payMethod].items[item.name].count += (item.quantity || 1);
+          groups[date].paymentGroups[payMethod].items[item.name].subtotal += ((item.price || 0) * (item.quantity || 1));
+        });
+      } catch (e) { console.error(e); }
+    });
+    return Object.values(groups).sort((a, b) => new Date(b.date) - new Date(a.date)).map(day => ({
+      ...day,
+      records: (day.records || []).sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0))
+    }));
+  }, [salesHistory, localHiddenIds]);
+
+  const totalPages = Math.max(1, Math.ceil(groupedSales.length / ITEMS_PER_PAGE));
+  const paginatedDays = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE;
+    return groupedSales.slice(start, start + ITEMS_PER_PAGE);
+  }, [groupedSales, currentPage]);
+
+  const searchMatches = useMemo(() => {
+    if (!searchQuery.trim()) return [];
+    const matches = [];
+    groupedSales.forEach((day, dayIdx) => {
+      (day.records || []).forEach(record => { if (record.note && record.note.includes(searchQuery)) matches.push({ traceId: record.traceId, dayIndex: dayIdx }); });
+    });
+    return matches;
+  }, [groupedSales, searchQuery]);
+
+  // --- 4. 匯出邏輯 (附錄拆分 & CSV 結構升級) ---
+  const generateCSVContent = (daysList, reportTitle) => {
+    let csv = `\uFEFF若晞茶空間 ${reportTitle}\n\n`;
+    const grandTotal = daysList.reduce((s, d) => s + d.total, 0);
+    csv += `總計營收: ${grandTotal}元\n\n`;
+
+    // 1. 統計帳務
+    csv += "【 統計帳務 】\n";
+    csv += "付款方式,總額,狀態說明\n";
+    const paymentSummary = {};
+    allPaymentMethods.forEach(m => paymentSummary[m.name] = 0);
+    daysList.forEach(day => {
+      Object.entries(day.paymentGroups).forEach(([mName, g]) => {
+        if (!paymentSummary[mName]) paymentSummary[mName] = 0;
+        paymentSummary[mName] += g.total;
+      });
+    });
+    Object.entries(paymentSummary).forEach(([mName, amount]) => {
+      if (amount !== 0) csv += `${mName},${amount},${mName === '現金' ? '彙總於本表' : `詳見${mName}附錄`}\n`;
+    });
+    csv += "\n";
+
+    // 2. 統計數量
+    csv += "【 統計數量 】\n";
+    csv += "品項名稱,銷售總量,銷售小計\n";
+    const itemSummary = {};
+    let otherSum = 0;
+    daysList.forEach(day => {
+      (day.records || []).forEach(r => {
+        (r.items || []).forEach(it => {
+          if (it.category === '其他') otherSum += ((it.price || 0) * (it.quantity || 1));
+          else {
+            if (!itemSummary[it.name]) itemSummary[it.name] = { count: 0, subtotal: 0 };
+            itemSummary[it.name].count += (it.quantity || 1);
+            itemSummary[it.name].subtotal += ((it.price || 0) * (it.quantity || 1));
+          }
+        });
+      });
+    });
+    Object.entries(itemSummary).forEach(([name, data]) => {
+      csv += `${name},${data.count},${data.subtotal}\n`;
+    });
+    if (otherSum !== 0) csv += `其他收入彙總,1,${otherSum}\n`;
+    csv += "\n";
+
+    // 3. 完整交易記錄
+    csv += "【 完整交易記錄 】\n";
+    csv += "交易日期,時間,金額,付款方式,內容,註\n";
+    daysList.forEach(day => {
+      (day.records || []).forEach(record => {
+        const itemSummary = (record.items || []).map(it => `${it.name}x${it.quantity}`).join('; ');
+        csv += `${day.date},${record.time},${record.total},${record.paymentMethod || '現金'},"${itemSummary}","${record.note || ''}"\n`;
+      });
+    });
+    csv += "\n";
+
+    // 4. 附錄拆分：Line Pay 與 轉帳
+    const appendAppendix = (methodName) => {
+      let appendCsv = `【 附錄：${methodName} 交易細項 】\n`;
+      appendCsv += "日期,時間,金額\n";
+      let hasAny = false;
+      daysList.forEach(day => {
+        (day.records || []).forEach(record => {
+          if (record.paymentMethod === methodName) {
+            appendCsv += `${day.date},${record.time},${record.total}\n`;
+            hasAny = true;
+          }
+        });
+      });
+      return hasAny ? appendCsv + "\n" : "";
     };
-    const currentQueue = JSON.parse(localStorage.getItem(`syncQueue_${appId}`) || "[]");
-    const newQueue = [...currentQueue, orderData];
-    localStorage.setItem(`syncQueue_${appId}`, JSON.stringify(newQueue));
-    setSyncQueue(newQueue);
-    setCurrentSale([]);
-    setDailyNote("");
-    setShowMobileCart(false);
-    processSyncQueue();
+
+    csv += appendAppendix('Line Pay');
+    csv += appendAppendix('轉帳');
+    allPaymentMethods.forEach(m => {
+      if (m.name !== '現金' && m.name !== 'Line Pay' && m.name !== '轉帳') {
+        csv += appendAppendix(m.name);
+      }
+    });
+
+    return csv;
+  };
+
+  const exportMonthlyReport = () => {
+    const [year, month] = exportMonth.split('-');
+    const targetMonthSales = groupedSales.filter(day => {
+      try {
+        const d = new Date(day.date);
+        if (isNaN(d.getTime())) return false; // 防呆
+        return d.getFullYear().toString() === year && (d.getMonth() + 1).toString().padStart(2, '0') === month;
+      } catch(e) { return false; }
+    });
+    if (targetMonthSales.length === 0) return;
+    const csv = generateCSVContent(targetMonthSales, `${year}年${month}月 報表`);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `若晞茶空間_月報表_${year}_${month}.csv`;
+    link.click();
+  };
+
+  const exportDailyReport = (dayData) => {
+    const csv = generateCSVContent([dayData], `日報表 (${dayData.date})`);
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(blob);
+    link.download = `若晞茶空間_日報表_${dayData.date.replace(/\//g, '-')}.csv`;
+    link.click();
+  };
+
+  // --- 5. 介面互動輔助 ---
+  const checkout = () => {
+    if ((currentSale || []).length === 0) return;
+    const now = new Date(); const traceId = generateUUID(); 
+    const orderData = { 
+      fullDate: now.toLocaleDateString(), time: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), 
+      timestamp: Date.now(), traceId, paymentMethod: selectedPayment, 
+      items: currentSale.map(i => ({ name: i.name, price: i.price, quantity: i.quantity, category: i.category })), 
+      total: currentSale.reduce((s, i) => s + (i.price * i.quantity), 0), 
+      note: dailyNote, isHidden: false 
+    };
+    
+    try {
+      const currentQueue = JSON.parse(window.localStorage.getItem(`syncQueue_${appId}`) || "[]");
+      window.localStorage.setItem(`syncQueue_${appId}`, JSON.stringify([...currentQueue, orderData])); 
+      setSyncQueue([...currentQueue, orderData]);
+    } catch(e) {}
+    
+    setCurrentSale([]); setDailyNote(""); setSelectedPayment("現金"); setShowMobileCart(false); 
+    setView('reports'); setHighlightedTraceId(traceId); setCurrentPage(1); 
+    setTimeout(() => setHighlightedTraceId(null), 3000); processSyncQueue();
+  };
+
+  const navigateSearch = (direction) => {
+    if (searchMatches.length === 0) return;
+    let nextIndex = currentSearchIndex + direction;
+    if (nextIndex < 0) nextIndex = searchMatches.length - 1;
+    if (nextIndex >= searchMatches.length) nextIndex = 0;
+    setCurrentSearchIndex(nextIndex); const match = searchMatches[nextIndex];
+    const targetPage = Math.floor(match.dayIndex / ITEMS_PER_PAGE) + 1;
+    if (currentPage !== targetPage) setCurrentPage(targetPage);
+    setHighlightedTraceId(match.traceId);
+  };
+
+  const jumpToDate = (dateStr) => {
+    if (!dateStr) return;
+    try {
+      const formattedDate = new Date(dateStr).toLocaleDateString();
+      const dayIndex = groupedSales.findIndex(d => d.date === formattedDate);
+      if (dayIndex !== -1) {
+        const targetPage = Math.floor(dayIndex / ITEMS_PER_PAGE) + 1; setCurrentPage(targetPage);
+        setTimeout(() => { const element = document.getElementById(`day-block-${formattedDate}`); if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 150);
+      }
+    } catch(e) {}
   };
 
   const requestDeleteRecord = async (id) => {
-    if (!id) return;
+    if (!id || !user) return;
     try {
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sales', id), { isHidden: true });
-      setLocalHiddenIds(prev => [...prev, id]);
+      setUndoItem(id); setLocalHiddenIds(prev => [...prev, id]);
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+      undoTimerRef.current = setTimeout(() => setUndoItem(null), 3000);
     } catch (err) { console.error("刪除失敗", err); }
   };
 
-  const handleEditSave = (id) => {
+  const handleUndo = async () => {
+    if (!undoItem || !user) return;
+    try {
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sales', undoItem), { isHidden: false });
+      setLocalHiddenIds(prev => prev.filter(id => id !== undoItem)); setUndoItem(null);
+      if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
+    } catch (err) { console.error("回復失敗", err); }
+  };
+
+  const handleEditSave = async (id) => {
+    if (!user) return;
     try {
       const target = allProducts.find(p => p.id === id);
       if (!target) return;
       const updateData = { name: editBuffer.name, price: Number(editBuffer.price), category: target.category, updatedAt: serverTimestamp() };
       setEditingProductId(null);
-      if (!target.isDefault && !target.id.startsWith('def_')) {
-        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id), updateData);
-      } else {
-        addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...updateData, originalName: target.name, isHidden: false });
-      }
+      if (!target.isDefault && !target.id.startsWith('def_')) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', id), updateData);
+      else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...updateData, originalName: target.name, isHidden: false });
     } catch (err) { console.error(err); }
   };
 
-  const confirmDelete = () => {
-    if (!productToDelete) return;
+  const confirmDelete = async () => {
+    if (!productToDelete || !user) return;
     try {
       if (!productToDelete.isDefault && !productToDelete.id.startsWith('def_')) {
-        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', productToDelete.id), { isHidden: true, updatedAt: serverTimestamp() });
+        await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', productToDelete.id), { isHidden: true, updatedAt: serverTimestamp() });
       } else {
-        addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: productToDelete.name, originalName: productToDelete.name, category: productToDelete.category, price: productToDelete.price, isHidden: true, updatedAt: serverTimestamp() });
+        await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), {
+          name: productToDelete.name, originalName: productToDelete.name, category: productToDelete.category, price: productToDelete.price, isHidden: true, updatedAt: serverTimestamp()
+        });
       }
-    } catch (err) { console.error(err); } finally { setProductToDelete(null); }
+    } catch (err) { console.error(err); }
+    finally { setProductToDelete(null); }
   };
 
-  const moveProduct = (index, direction) => {
+  const moveProduct = async (index, direction) => {
+    if (!user) return;
     const targetIndex = index + direction;
     if (targetIndex < 0 || targetIndex >= allProducts.length) return;
-    const currentItem = allProducts[index];
-    const neighborItem = allProducts[targetIndex];
-    const currentOrder = currentItem.sortOrder ?? (index * 10);
-    const neighborOrder = neighborItem.sortOrder ?? (targetIndex * 10);
-    const updateItemOrder = (item, newOrder) => {
-      if (!item.isDefault && !item.id.startsWith('def_')) {
-        updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', item.id), { sortOrder: newOrder });
-      } else {
-        addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: item.name, originalName: item.name, category: item.category, price: item.price, sortOrder: newOrder });
-      }
+    const currentItem = allProducts[index]; const neighborItem = allProducts[targetIndex];
+    const currentOrder = currentItem.sortOrder ?? (index * 10); const neighborOrder = neighborItem.sortOrder ?? (targetIndex * 10);
+    const updateItemOrder = async (item, newOrder) => {
+      if (!item.isDefault && !item.id.startsWith('def_')) await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'products', item.id), { sortOrder: newOrder });
+      else await addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { name: item.name, originalName: item.name, category: item.category, price: item.price, sortOrder: newOrder });
     };
-    try { updateItemOrder(currentItem, neighborOrder); updateItemOrder(neighborItem, currentOrder === neighborOrder ? currentOrder + 1 : currentOrder); } catch (err) { console.error(err); }
+    try { await updateItemOrder(currentItem, neighborOrder); await updateItemOrder(neighborItem, currentOrder === neighborOrder ? currentOrder + 1 : currentOrder); } catch (err) { console.error(err); }
   };
 
-  // --- 報表數據彙整 ---
-  const groupedSales = useMemo(() => {
-    const groups = {};
-    const activeSales = salesHistory.filter(s => !s.isHidden && !localHiddenIds.includes(s.id));
-    activeSales.forEach(record => {
-      try {
-        const date = record.fullDate || "未知日期";
-        if (!groups[date]) groups[date] = { date, total: 0, records: [], summary: {} };
-        const safeTotal = typeof record.total === 'number' ? record.total : 0;
-        groups[date].records.push({ ...record, total: safeTotal, time: record.time || "--:--" });
-        groups[date].total += safeTotal;
-        record.items.forEach(item => {
-          if (!groups[date].summary[item.name]) groups[date].summary[item.name] = { count: 0, subtotal: 0, price: item.price };
-          groups[date].summary[item.name].count += item.quantity;
-          groups[date].summary[item.name].subtotal += (item.price * item.quantity);
-        });
-      } catch (e) { console.error(e); }
-    });
-    return Object.values(groups).sort((a, b) => new Date(b.date) - new Date(a.date));
-  }, [salesHistory, localHiddenIds]);
+  const cartTotal = (currentSale || []).reduce((s, i) => s + ((i.price || 0) * (i.quantity || 1)), 0);
 
-  const downloadCSV = (dataList, filename) => {
-    let csv = "\uFEFF統計日期,品項名稱,單價,銷售數量,銷售小計\n";
-    dataList.forEach(day => {
-      Object.entries(day.summary).forEach(([name, data]) => {
-        csv += `${day.date},"${name}",${data.price},${data.count},${data.subtotal}\n`;
-      });
-      csv += `${day.date},當日總計,, ,${day.total}\n\n`;
-    });
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const link = document.createElement("a");
-    link.href = URL.createObjectURL(blob);
-    link.download = filename;
-    link.click();
+  const getPayColorClass = (methodName, isActive = false) => {
+    const method = allPaymentMethods.find(m => m.name === methodName);
+    const color = method ? method.color : 'yellow';
+    const colorMap = { yellow: isActive ? 'bg-yellow-500 border-yellow-500 text-black' : 'border-slate-800 text-slate-400', emerald: isActive ? 'bg-emerald-500 border-emerald-500 text-black' : 'border-slate-800 text-slate-400', blue: isActive ? 'bg-blue-500 border-blue-500 text-black' : 'border-slate-800 text-slate-400', purple: isActive ? 'bg-purple-500 border-purple-500 text-black' : 'border-slate-800 text-slate-400', rose: isActive ? 'bg-rose-500 border-rose-500 text-black' : 'border-slate-800 text-slate-400', cyan: isActive ? 'bg-cyan-500 border-cyan-500 text-black' : 'border-slate-800 text-slate-400' };
+    return colorMap[color] || colorMap.yellow;
   };
 
-  const cartTotal = currentSale.reduce((s, i) => s + (i.price * i.quantity), 0);
-  const cartItemCount = currentSale.reduce((s, i) => s + i.quantity, 0);
-
-  // 以下為 UI 渲染層，由於程式碼長度限制，請輸入「繼續」以獲取剩餘程式碼
+  const renderPagination = () => {
+    if (totalPages <= 1) return null;
+    const pages = [];
+    let startPage = Math.max(1, currentPage - 2);
+    let endPage = Math.min(totalPages, startPage + 4);
+    if (endPage - startPage < 4) startPage = Math.max(1, endPage - 4);
+    for (let i = startPage; i <= endPage; i++) pages.push(i);
+    return (
+      <div className="flex flex-col items-center gap-4 py-8 border-t border-slate-800 mt-12">
+        <div className="flex items-center gap-1 sm:gap-2">
+          <button disabled={currentPage === 1} onClick={() => setCurrentPage(prev => prev - 1)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 disabled:opacity-20 transition-all"><ChevronLeft size={20} /></button>
+          {startPage > 1 && <><button onClick={() => setCurrentPage(1)} className="w-10 h-10 rounded-lg text-sm font-bold text-slate-400 hover:bg-slate-800 transition-all">1</button>{startPage > 2 && <MoreHorizontal size={16} className="text-slate-600 mx-1" />}</>}
+          {pages.map(p => (<button key={p} onClick={() => setCurrentPage(p)} className={`w-10 h-10 rounded-lg text-sm font-black transition-all ${currentPage === p ? 'bg-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}>{p}</button>))}
+          {endPage < totalPages && <>{endPage < totalPages - 1 && <MoreHorizontal size={16} className="text-slate-600 mx-1" />}<button onClick={() => setCurrentPage(totalPages)} className="w-10 h-10 rounded-lg text-sm font-bold text-slate-400 hover:bg-slate-800 transition-all">{totalPages}</button></>}
+          <button disabled={currentPage === totalPages} onClick={() => setCurrentPage(prev => prev + 1)} className="p-2 rounded-lg text-slate-400 hover:bg-slate-800 disabled:opacity-20 transition-all"><ChevronRight size={20} /></button>
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div className="min-h-screen bg-[#070b1a] text-slate-200 font-sans pb-24 md:pb-0 selection:bg-yellow-500/30">
+    <div className="min-h-screen bg-[#070b1a] text-slate-200 font-sans pb-24 md:pb-0">
       <nav className="bg-[#0e1630] border-b border-slate-800 p-3 md:p-4 flex justify-between items-center sticky top-0 z-50">
         <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-yellow-500 rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(234,179,8,0.2)]">
-            <ShoppingCart size={18} className="text-[#070b1a]" />
-          </div>
-          <h1 className="text-sm md:text-lg font-bold text-white tracking-tight">若晞茶空間</h1>
+          <div className="w-8 h-8 bg-yellow-500 rounded-lg flex items-center justify-center"><ShoppingCart size={18} className="text-[#070b1a]" /></div>
+          <h1 className="text-sm md:text-lg font-bold text-white tracking-tight">若晞茶空間銷售管理系統</h1>
         </div>
         <div className="flex items-center gap-2 md:gap-4">
           <div className={`flex items-center gap-1 px-3 py-1 rounded-full text-[10px] font-bold ${isOnline ? 'text-emerald-500 bg-emerald-500/10' : 'text-red-500 bg-red-500/10'}`}>
             {isSaving ? <Loader2 size={12} className="animate-spin" /> : isOnline ? <Wifi size={12} /> : <WifiOff size={12} />}
-            <span className="hidden xs:inline">{isSaving ? '同步中' : isOnline ? '連線中' : '離線模式'}</span>
+            <span className="hidden sm:inline">{isSaving ? '同步中' : isOnline ? '連線中' : '離線模式'}</span>
             {syncQueue.length > 0 && <span className="ml-1 bg-red-500 text-white px-1.5 rounded-full animate-pulse font-black">{syncQueue.length}</span>}
           </div>
           <div className="flex bg-[#070b1a] rounded-full p-1 border border-slate-800">
@@ -302,270 +556,391 @@ const App = () => {
         {view === 'sales' && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8 space-y-6">
-              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3 py-2 sticky top-[62px] z-40 bg-[#070b1a]/95 backdrop-blur-md border-b border-slate-800/50">
+              <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3 py-2 sticky top-[62px] z-40 bg-[#070b1a]/95 backdrop-blur-md">
                 {['全部', '冷飲', '熱飲', '餐點', '其他'].map(cat => (
-                  <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-xl text-[11px] font-black border transition-all whitespace-nowrap ${activeCategory === cat ? 'bg-yellow-500 border-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'bg-[#0e1630] border-slate-800 text-slate-400'}`}>
-                    {cat}
-                  </button>
+                  <button key={cat} onClick={() => setActiveCategory(cat)} className={`px-5 py-2 rounded-xl text-[11px] font-black border transition-all whitespace-nowrap ${activeCategory === cat ? 'bg-yellow-500 border-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'bg-[#0e1630] border-slate-800 text-slate-400'}`}>{cat}</button>
                 ))}
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 gap-3">
-                {allProducts.filter(p => activeCategory === '全部' || p.category === activeCategory).map(p => (
+                {(allProducts || []).filter(p => p && (activeCategory === '全部' || p.category === activeCategory)).map(p => (
                   <button key={p.id} onClick={() => {
                     const ex = currentSale.find(i => i.name === p.name);
                     if(ex) setCurrentSale(currentSale.map(i => i.name === p.name ? {...i, quantity: i.quantity+1}:i));
                     else setCurrentSale([...currentSale, {...p, quantity: 1}]);
-                  }} className="p-4 bg-[#0e1630] border border-slate-800 rounded-2xl text-left hover:border-yellow-500 active:scale-95 transition-all group shadow-sm">
-                    <div className="text-[9px] text-slate-500 uppercase font-black tracking-widest">{p.category}</div>
+                  }} className="p-4 bg-[#0e1630] border border-slate-800 rounded-2xl text-left lg:hover:border-yellow-500 active:scale-95 transition-all group">
+                    <div className="text-[9px] text-slate-500 uppercase font-black">{p.category}</div>
                     <div className="font-bold text-sm h-10 mt-1 text-white line-clamp-2">{p.name}</div>
-                    <div className="mt-3 flex justify-between items-center">
-                      <span className="font-black text-yellow-500 text-lg">${p.price}</span>
-                      <div className="w-6 h-6 rounded-full bg-slate-800 flex items-center justify-center group-hover:bg-yellow-500 transition-colors">
-                        <Plus size={14} className="text-slate-400 group-hover:text-black" />
-                      </div>
-                    </div>
+                    <div className="mt-3 flex justify-between items-center"><span className="font-black text-yellow-500">${p.price}</span><Plus size={14} className="text-slate-600 group-hover:text-yellow-500" /></div>
                   </button>
                 ))}
               </div>
             </div>
-            
             <div className="hidden lg:block lg:col-span-4">
               <div className="bg-[#0e1630] border border-slate-800 rounded-3xl p-6 sticky top-24 shadow-2xl h-[calc(100vh-140px)] flex flex-col">
                 <h2 className="text-xs font-bold text-slate-500 mb-6 flex items-center gap-2 uppercase tracking-widest"><ClipboardList size={18} className="text-yellow-500" /> 當前訂單</h2>
                 <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                  {currentSale.length === 0 ? <div className="py-10 text-center text-slate-700 text-sm italic">點擊左側品項開始</div> : 
+                  {(currentSale || []).length === 0 ? <div className="py-10 text-center text-slate-700 text-sm italic">點擊左側品項開始</div> : 
                     currentSale.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center bg-[#070b1a]/40 p-3 rounded-xl border border-slate-800/50">
-                        <div>
-                          <div className="text-sm font-bold text-white">{item.name}</div>
-                          <div className="text-xs text-slate-500">${item.price} × {item.quantity}</div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-sm font-black text-yellow-500">${item.price * item.quantity}</div>
-                          <button onClick={() => setCurrentSale(currentSale.filter((_, i) => i !== idx))} className="text-slate-600 hover:text-red-400 p-1"><X size={14} /></button>
-                        </div>
+                      <div key={idx} className="flex justify-between items-center">
+                        <div><div className="text-sm font-bold text-white">{item.name}</div><div className="text-xs text-slate-500">${item.price} × {item.quantity}</div></div>
+                        <div className="flex items-center gap-4"><div className="text-sm font-black text-yellow-500">${item.price * item.quantity}</div><button onClick={() => setCurrentSale(currentSale.filter((_, i) => i !== idx))} className="text-slate-800 hover:text-red-400 p-1"><X size={14} /></button></div>
                       </div>
                     ))
                   }
                 </div>
                 <div className="mt-6 pt-6 border-t border-slate-800 space-y-4">
-                  <textarea value={dailyNote} onChange={e => setDailyNote(e.target.value)} placeholder="備註資訊..." className="w-full bg-[#070b1a] border border-slate-800 rounded-xl p-3 text-xs text-slate-300 h-20 outline-none focus:border-yellow-500/50 transition-colors" />
-                  <div className="flex justify-between items-end">
-                    <span className="text-xs text-slate-500 font-bold uppercase tracking-tighter">總額</span>
-                    <span className="text-4xl font-black text-white tracking-tighter">${cartTotal}</span>
-                  </div>
-                  <button onClick={checkout} disabled={currentSale.length===0} className="w-full py-4 rounded-2xl bg-yellow-500 text-black font-black hover:bg-yellow-400 disabled:bg-slate-800 disabled:text-slate-500 transition-all flex justify-center items-center gap-2 shadow-lg shadow-yellow-500/10">確認結帳</button>
-                </div>
-              </div>
-            </div>
-
-            <div className="lg:hidden fixed bottom-8 right-6 z-[60]">
-              <button 
-                onClick={() => setShowMobileCart(true)}
-                className={`w-16 h-16 rounded-full bg-yellow-500 text-black shadow-[0_10px_30px_rgba(234,179,8,0.4)] flex items-center justify-center transition-all active:scale-90 ${currentSale.length > 0 ? 'scale-110 opacity-100' : 'scale-0 opacity-0'}`}
-              >
-                <div className="relative">
-                  <ShoppingBag size={28} />
-                  {cartItemCount > 0 && (
-                    <span className="absolute -top-3 -right-3 bg-red-500 text-white text-[10px] font-black min-w-[24px] h-6 px-1 rounded-full flex items-center justify-center border-2 border-yellow-500">
-                      {cartItemCount}
-                    </span>
-                  )}
-                </div>
-              </button>
-            </div>
-
-            {showMobileCart && (
-              <div className="fixed inset-0 bg-[#070b1a] z-[100] lg:hidden flex flex-col animate-in slide-in-from-bottom duration-300">
-                <div className="p-4 border-b border-slate-800 flex justify-between items-center bg-[#0e1630]">
-                  <h2 className="font-black text-white flex items-center gap-2 italic"><ClipboardList className="text-yellow-500" size={20} /> 當前訂單</h2>
-                  <button onClick={() => setShowMobileCart(false)} className="p-2 text-slate-400 bg-slate-800/50 rounded-full"><X size={20} /></button>
-                </div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                  {currentSale.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center h-64 text-slate-700 gap-4 italic text-sm">
-                      <ShoppingBag size={48} className="opacity-20" />
-                      <p>籃子裡空空的</p>
+                  <div className="space-y-2">
+                    <span className="text-[10px] font-black text-slate-600 uppercase tracking-widest block">付款方式</span>
+                    <div className="flex flex-wrap gap-2">
+                      {(allPaymentMethods || []).map(m => (<button key={m.name} onClick={() => setSelectedPayment(m.name)} className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${getPayColorClass(m.name, selectedPayment === m.name)}`}>{m.name}</button>))}
                     </div>
-                  ) : (
-                    currentSale.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center bg-[#0e1630] p-4 rounded-2xl border border-slate-800">
-                        <div>
-                          <div className="text-base font-bold text-white">{item.name}</div>
-                          <div className="text-xs text-slate-500">${item.price} × {item.quantity}</div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          <div className="text-lg font-black text-yellow-500">${item.price * item.quantity}</div>
-                          <button onClick={() => setCurrentSale(currentSale.filter((_, i) => i !== idx))} className="text-red-400 p-2 bg-red-400/10 rounded-xl"><Trash2 size={16} /></button>
-                        </div>
-                      </div>
-                    ))
-                  )}
-                </div>
-                <div className="p-6 bg-[#0e1630] border-t border-slate-800 space-y-4 shadow-[0_-15px_40px_rgba(0,0,0,0.6)]">
-                  <textarea 
-                    value={dailyNote} 
-                    onChange={e => setDailyNote(e.target.value)} 
-                    placeholder="輸入訂單備註..." 
-                    className="w-full bg-[#070b1a] border border-slate-800 rounded-2xl p-4 text-sm text-slate-200 h-24 outline-none focus:border-yellow-500/50" 
-                  />
-                  <div className="flex justify-between items-center px-2">
-                    <span className="text-xs text-slate-500 font-black uppercase tracking-widest">總金額</span>
-                    <span className="text-4xl font-black text-white tracking-tighter">${cartTotal}</span>
                   </div>
-                  <button 
-                    onClick={checkout} 
-                    disabled={currentSale.length === 0} 
-                    className="w-full py-5 rounded-2xl bg-yellow-500 text-black font-black text-lg shadow-xl shadow-yellow-500/10 active:scale-95 transition-transform"
-                  >
-                    結帳完成
-                  </button>
+                  <textarea value={dailyNote} onChange={e => setDailyNote(e.target.value)} placeholder="備註…" className="w-full bg-[#070b1a] border border-slate-800 rounded-xl p-3 text-xs text-slate-300 h-16 outline-none" />
+                  <div className="flex justify-between items-end"><span className="text-xs text-slate-500 font-bold uppercase">總計</span><span className="text-4xl font-black text-white tracking-tighter">${cartTotal}</span></div>
+                  <button onClick={checkout} disabled={currentSale.length===0} className="w-full py-4 rounded-2xl bg-yellow-500 text-black font-black hover:bg-yellow-400 disabled:bg-slate-800 transition-all flex justify-center items-center gap-2">確認結帳</button>
                 </div>
               </div>
-            )}
+            </div>
           </div>
         )}
 
         {view === 'inventory' && (
-          <div className="bg-[#0e1630] p-6 rounded-3xl border border-slate-800 max-w-2xl mx-auto shadow-2xl">
-            <h2 className="text-xl font-black mb-6 flex items-center gap-3 italic text-white"><Settings className="text-yellow-500"/>品項庫管理</h2>
-            <div className="grid grid-cols-1 gap-3 mb-8 bg-[#070b1a] p-6 rounded-2xl border border-slate-800">
-                <input className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm" placeholder="新項目名稱" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} />
-                <div className="grid grid-cols-2 gap-3">
-                  <input className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm" type="number" placeholder="單價" value={newItem.price} onChange={e=>setNewItem({...newItem, price: e.target.value})} />
-                  <select className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm text-slate-400" value={newItem.category} onChange={e=>setNewItem({...newItem, category: e.target.value})}>
-                    {['冷飲', '熱飲', '餐點', '其他'].map(c=><option key={c} value={c}>{c}</option>)}
-                  </select>
-                </div>
-                <button onClick={()=>{
-                  if(!newItem.name || !newItem.price) return;
-                  addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...newItem, price: Number(newItem.price), isHidden: false, sortOrder: allProducts.length * 10, updatedAt: serverTimestamp() });
-                  setNewItem({name:'', price:'', category:'冷飲'});
-                }} className="bg-yellow-500 text-black py-4 rounded-xl font-black shadow-lg shadow-yellow-500/10">新增品項</button>
+          <div className="max-w-2xl mx-auto space-y-8 animate-in fade-in duration-500">
+            <div className="bg-[#0e1630] p-6 rounded-3xl border border-slate-800 shadow-2xl">
+              <h2 className="text-xl font-black mb-6 flex items-center gap-3 italic text-white"><Settings className="text-yellow-500"/>品項管理</h2>
+              <div className="grid grid-cols-1 gap-3 mb-8 bg-[#070b1a] p-6 rounded-2xl border border-slate-800">
+                  <input className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm text-white" placeholder="新項目名稱" value={newItem.name} onChange={e=>setNewItem({...newItem, name: e.target.value})} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <input className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm text-white" type="number" placeholder="單價" value={newItem.price} onChange={e=>setNewItem({...newItem, price: e.target.value})} />
+                    <select className="w-full bg-[#0e1630] border border-slate-800 p-4 rounded-xl text-sm text-slate-400" value={newItem.category} onChange={e=>setNewItem({...newItem, category: e.target.value})}>
+                      {['冷飲', '熱飲', '餐點', '其他'].map(c=><option key={c} value={c}>{c}</option>)}
+                    </select>
+                  </div>
+                  <button onClick={()=>{ if(!newItem.name || !newItem.price || !user) return; addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'products'), { ...newItem, price: Number(newItem.price), isHidden: false, sortOrder: allProducts.length * 10, updatedAt: serverTimestamp() }); setNewItem({name:'', price:'', category:'冷飲'}); }} className="bg-yellow-500 text-black py-4 rounded-xl font-black">新增品項</button>
+              </div>
+              <div className="space-y-2">
+                {(allProducts || []).map((p, idx)=>(
+                  <div key={p.id} className="flex justify-between items-center p-4 bg-[#070b1a]/50 rounded-2xl border border-slate-800/50 min-h-[72px]">
+                    {editingProductId === p.id ? (
+                      <div className="flex-1 flex flex-wrap sm:flex-nowrap items-center gap-3 w-full">
+                        <input className="flex-1 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white focus:outline-none focus:border-yellow-500 min-w-[120px]" value={editBuffer.name} onChange={e=>setEditBuffer({...editBuffer, name: e.target.value})} placeholder="品項名稱" autoFocus />
+                        <input className="w-24 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white focus:outline-none focus:border-yellow-500" type="number" value={editBuffer.price} onChange={e=>setEditBuffer({...editBuffer, price: e.target.value})} placeholder="單價" />
+                        <div className="flex items-center gap-1 ml-auto shrink-0"><button onClick={() => handleEditSave(p.id)} className="p-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white rounded-lg transition-all"><Check size={18}/></button><button onClick={() => setEditingProductId(null)} className="p-2 bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white rounded-lg transition-all"><X size={18}/></button></div>
+                      </div>
+                    ) : (
+                      <><div className="flex items-center gap-3"><div className="flex flex-col"><button disabled={idx===0} onClick={()=>moveProduct(idx, -1)} className="p-1 text-slate-700 hover:text-yellow-500 disabled:opacity-10"><ChevronUp size={16}/></button><button disabled={idx===allProducts.length-1} onClick={()=>moveProduct(idx, 1)} className="p-1 text-slate-700 hover:text-yellow-500 disabled:opacity-10"><ChevronDown size={16}/></button></div><div className="flex flex-col"><span className="text-[8px] font-black text-slate-600 uppercase">{p.category}</span><span className="font-bold text-sm text-slate-200">{p.name}</span><span className="text-yellow-500 font-black text-xs">${p.price}</span></div></div><div className="flex items-center gap-1"><button onClick={() => { setEditingProductId(p.id); setEditBuffer({ name: p.name, price: p.price }); }} className="p-2 text-slate-700 hover:text-yellow-500"><Edit3 size={18} /></button><button onClick={() => setProductToDelete(p)} className="p-2 text-slate-700 hover:text-red-500"><Trash2 size={18} /></button></div></>
+                    )}
+                  </div>
+                ))}
+              </div>
             </div>
-            <div className="space-y-2">
-              {allProducts.map((p, idx)=>(
-                <div key={p.id} className="flex justify-between items-center p-4 bg-[#070b1a]/50 rounded-2xl border border-slate-800/50">
-                  {editingProductId === p.id ? (
-                    <div className="flex-1 flex flex-wrap sm:flex-nowrap items-center gap-3 w-full">
-                      <input className="flex-1 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white focus:outline-none focus:border-yellow-500 min-w-[120px]" value={editBuffer.name} onChange={e=>setEditBuffer({...editBuffer, name: e.target.value})} />
-                      <input className="w-24 bg-[#0e1630] border border-yellow-500/50 p-2 rounded-xl text-sm text-white" type="number" value={editBuffer.price} onChange={e=>setEditBuffer({...editBuffer, price: e.target.value})} />
-                      <div className="flex items-center gap-1 ml-auto shrink-0">
-                        <button onClick={() => handleEditSave(p.id)} className="p-2 bg-emerald-500/10 text-emerald-500 rounded-lg"><Check size={18}/></button>
-                        <button onClick={() => setEditingProductId(null)} className="p-2 bg-slate-800 text-slate-400 rounded-lg"><X size={18}/></button>
-                      </div>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-3">
-                        <div className="flex flex-col">
-                          <button disabled={idx===0} onClick={()=>moveProduct(idx, -1)} className="p-1 text-slate-700 hover:text-yellow-500 disabled:opacity-0"><ChevronUp size={16}/></button>
-                          <button disabled={idx===allProducts.length-1} onClick={()=>moveProduct(idx, 1)} className="p-1 text-slate-700 hover:text-yellow-500 disabled:opacity-0"><ChevronDown size={16}/></button>
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-[8px] font-black text-slate-600 uppercase tracking-widest">{p.category}</span>
-                          <span className="font-bold text-sm text-slate-200">{p.name}</span>
-                          <span className="text-yellow-500 font-black text-xs">${p.price}</span>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <button onClick={() => { setEditingProductId(p.id); setEditBuffer({ name: p.name, price: p.price }); }} className="p-2 text-slate-700 hover:text-yellow-500"><Edit3 size={18} /></button>
-                        <button onClick={() => setProductToDelete(p)} className="p-2 text-slate-700 hover:text-red-500"><Trash2 size={18} /></button>
-                      </div>
-                    </>
-                  )}
+            <div className="bg-[#0e1630] p-6 rounded-3xl border border-slate-800 shadow-2xl">
+              <h2 className="text-xl font-black mb-6 flex items-center gap-3 italic text-white"><CreditCard className="text-yellow-500"/>支付方式管理</h2>
+              <div className="space-y-4 mb-6">
+                <div className="flex gap-2">
+                  <input className="flex-1 bg-[#070b1a] border border-slate-800 p-4 rounded-xl text-sm text-white" placeholder="新增支付方式" value={newPaymentName} onChange={e => setNewPaymentName(e.target.value)} />
+                  <button onClick={() => { if(!newPaymentName.trim() || !user) return; addDoc(collection(db, 'artifacts', appId, 'public', 'data', 'paymentMethods'), { name: newPaymentName.trim(), color: newPaymentColor, createdAt: serverTimestamp() }); setNewPaymentName(""); }} className="bg-yellow-500 text-black px-6 rounded-xl font-black">新增</button>
                 </div>
-              ))}
+                <div className="flex items-center gap-3 bg-[#070b1a] p-3 rounded-xl border border-slate-800">
+                  <div className="flex items-center gap-2 text-[10px] font-black text-slate-500 uppercase tracking-widest shrink-0"><Palette size={14}/> 選擇底色:</div>
+                  <div className="flex gap-2">
+                    {colorOptions.map(c => (<button key={c.value} onClick={() => setNewPaymentColor(c.value)} className={`w-6 h-6 rounded-full border-2 transition-all ${newPaymentColor === c.value ? 'border-white scale-110' : 'border-transparent opacity-50'}`} style={{ backgroundColor: c.value === 'emerald' ? '#10b981' : c.value === 'rose' ? '#f43f5e' : c.value === 'cyan' ? '#06b6d4' : c.value === 'yellow' ? '#eab308' : c.value === 'blue' ? '#3b82f6' : '#a855f7' }} title={c.name} />))}
+                  </div>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                {(allPaymentMethods || []).map(m => (
+                  <div key={m.name} className="bg-[#070b1a] p-3 rounded-xl border border-slate-800 flex justify-between items-center group">
+                    <div className="flex items-center gap-2">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: m.color === 'emerald' ? '#10b981' : m.color === 'rose' ? '#f43f5e' : m.color === 'cyan' ? '#06b6d4' : m.color === 'yellow' ? '#eab308' : m.color === 'blue' ? '#3b82f6' : '#a855f7' }} />
+                      <span className="text-xs font-bold text-slate-300">{m.name}</span>
+                    </div>
+                    {!defaultPaymentMethods.some(dm => dm.name === m.name) && (<button onClick={async () => { const target = dbPaymentMethods.find(dbM => dbM.name === m.name); if(target) await deleteDoc(doc(db, 'artifacts', appId, 'public', 'data', 'paymentMethods', target.id)); }} className="text-slate-700 hover:text-red-500 transition-colors"><Trash2 size={14} /></button>)}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
         )}
 
         {view === 'reports' && (
-          <div className="space-y-8 pb-20">
-            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 px-2">
-              <h2 className="text-2xl font-black text-white italic tracking-tight">銷售大數據中心</h2>
-              <button onClick={() => { if (groupedSales.length > 0) downloadCSV(groupedSales, `若晞完整報表.csv`); }} className="w-full sm:w-auto bg-[#0e1630] text-emerald-500 border border-emerald-500/20 px-5 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs hover:bg-emerald-500 hover:text-white transition-all">
-                <FileSpreadsheet size={16} /> 匯出全部資料
-              </button>
+          <div className="space-y-6 pb-20 animate-in fade-in duration-500">
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
+              <h2 className="text-2xl font-black text-white italic">銷售數據中心</h2>
+              <div className="flex items-center gap-3 w-full sm:w-auto">
+                <div className="relative">
+                  <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
+                  <input 
+                    type="month" 
+                    value={exportMonth}
+                    onChange={(e) => setExportMonth(e.target.value)}
+                    className="bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl py-2.5 pl-9 pr-3 outline-none focus:border-emerald-500 transition-all"
+                  />
+                </div>
+                <button onClick={exportMonthlyReport} className="flex-1 sm:flex-none bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs shadow-lg shadow-emerald-500/10 hover:bg-emerald-500 transition-all">
+                  <FileSpreadsheet size={16} /> 匯出月報表
+                </button>
+              </div>
             </div>
 
-            {groupedSales.map(day => (
-              <div key={day.date} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-xl mb-12">
-                <div className="bg-[#121c3b] p-6 flex flex-wrap justify-between items-center border-b border-slate-800 gap-4">
-                  <div className="flex items-center gap-3">
-                    <Calendar className="text-yellow-500" size={24} />
-                    <span className="text-xl font-black text-white">{day.date}</span>
-                    <button onClick={() => downloadCSV([day], `日報表_${day.date}.csv`)} className="ml-2 p-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
-                      <Download size={14} /> 匯出日報
-                    </button>
-                  </div>
-                  <div className="text-right">
-                    <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest">當日營業額</div>
-                    <div className="text-2xl font-black text-yellow-500 tracking-tighter">${day.total}</div>
+            <div className="bg-[#0e1630] border border-slate-800 p-3 rounded-2xl flex flex-col sm:flex-row items-center gap-3 sticky top-[62px] z-[45] shadow-xl">
+              <div className="relative flex-1 w-full"><Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" /><input type="text" placeholder="搜尋關鍵字..." className="w-full bg-[#070b1a] border border-slate-800 rounded-xl py-2.5 pl-10 pr-10 text-sm text-white focus:border-yellow-500 outline-none transition-all" value={searchQuery} onChange={(e) => { setSearchQuery(e.target.value); setCurrentSearchIndex(-1); }} />{searchQuery && <button onClick={() => { setSearchQuery(""); setCurrentSearchIndex(-1); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white"><X size={16} /></button>}</div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button onClick={() => setIsSummarizedView(!isSummarizedView)} className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all text-xs font-black shrink-0 ${isSummarizedView ? 'bg-yellow-500 border-yellow-500 text-black' : 'bg-[#070b1a] border-slate-800 text-slate-400 hover:text-white'}`}>{isSummarizedView ? <LayoutGrid size={16}/> : <Layers size={16}/>}{isSummarizedView ? '統計帳務' : '統計數量'}</button>
+                <div className="relative flex-1 sm:w-40"><Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500" /><input type="date" className="w-full bg-[#070b1a] border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 appearance-none" value={selectedDateJump} onChange={(e) => { setSelectedDateJump(e.target.value); jumpToDate(e.target.value); }} /></div>
+                {searchMatches.length > 0 && (<div className="flex items-center gap-2 bg-[#070b1a] px-3 py-2 rounded-xl border border-slate-800 shrink-0"><span className="text-[10px] font-black text-yellow-500 uppercase tracking-tighter">{currentSearchIndex + 1} / {searchMatches.length}</span><div className="flex gap-1 ml-1"><button onClick={() => navigateSearch(-1)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><ChevronLeft size={18} /></button><button onClick={() => navigateSearch(1)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><ChevronRight size={18} /></button></div></div>)}
+              </div>
+            </div>
+
+            {(paginatedDays || []).length === 0 ? (<div className="py-20 text-center text-slate-600 italic">尚無相關銷售紀錄</div>) : paginatedDays.map(day => (
+              <div key={day.date} id={`day-block-${day.date}`} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-2xl mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 scroll-mt-24">
+                <div className="bg-[#121c3b] p-6 flex justify-between items-center border-b border-slate-800">
+                  <div className="flex items-center gap-3"><Calendar className="text-yellow-500" size={24} /><span className="text-xl font-black text-white">{day.date}</span></div>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <div className="text-[10px] text-slate-500 uppercase font-black">當日營收總計</div>
+                      <div className="text-2xl font-black text-yellow-500 tracking-tighter">${day.total}</div>
+                    </div>
+                    <button onClick={() => exportDailyReport(day)} className="bg-emerald-600/20 hover:bg-emerald-600 text-emerald-500 hover:text-white p-2 rounded-xl border border-emerald-500/30 transition-all flex items-center gap-2 text-[10px] font-black uppercase"><Download size={14} /> 日報表</button>
                   </div>
                 </div>
+                
+                <div className="p-6 bg-[#070b1a]/30 space-y-10">
+                  {isSummarizedView ? (
+                    (() => {
+                      const standardItems = {};
+                      const otherTransactions = (day.records || []).map(r => {
+                        const otherItemsInRecord = (r.items || []).filter(it => it && it.category === '其他');
+                        if (otherItemsInRecord.length === 0) return null;
+                        const totalOtherAmount = otherItemsInRecord.reduce((sum, it) => sum + ((it.price || 0) * (it.quantity || 1)), 0);
+                        return { time: r.time, total: totalOtherAmount, note: r.note, paymentMethod: r.paymentMethod, timestamp: r.timestamp };
+                      }).filter(Boolean);
 
-                <div className="p-6 bg-[#070b1a]/30">
-                  <h3 className="text-[10px] font-black text-slate-500 mb-4 flex items-center gap-2 uppercase tracking-widest"><BarChart3 size={14} className="text-emerald-500" /> 品項匯總</h3>
-                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {Object.entries(day.summary).map(([name, data]) => (
-                      <div key={name} className="bg-[#0e1630] border border-slate-800/50 p-4 rounded-2xl flex justify-between items-center shadow-sm">
-                        <div>
-                          <div className="text-sm font-bold text-slate-200">{name}</div>
-                          <div className="text-[10px] text-slate-500 tracking-tight">${data.price} / 單位</div>
+                      (day.records || []).forEach(r => {
+                        (r.items || []).forEach(it => {
+                          if (it && it.category !== '其他') {
+                            if (!standardItems[it.name]) { standardItems[it.name] = { count: 0, subtotal: 0, price: it.price || 0 }; }
+                            standardItems[it.name].count += (it.quantity || 1);
+                            standardItems[it.name].subtotal += ((it.price || 0) * (it.quantity || 1));
+                          }
+                        });
+                      });
+
+                      return (
+                        <div className="space-y-10 animate-in fade-in duration-300">
+                          <div className="space-y-4">
+                            <h3 className="text-[11px] font-black text-slate-400 flex items-center gap-2 uppercase tracking-[0.2em] border-b border-slate-800 pb-2"><BarChart3 size={16} className="text-emerald-500"/>統計數量 (不含其他)</h3>
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {Object.entries(standardItems).map(([name, data]) => (
+                                <div key={name} className="bg-[#0e1630]/60 border border-slate-800/50 p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                                  <div><div className="text-sm font-bold text-slate-200">{name}</div><div className="text-[10px] text-slate-500">${data.price} / 單位</div></div>
+                                  <div className="text-right"><div className="text-sm font-black text-white">x {data.count}</div><div className="text-xs font-bold text-emerald-500">${data.subtotal}</div></div>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                          {otherTransactions.length > 0 && (
+                            <div className="space-y-4">
+                              <h3 className="text-[11px] font-black text-slate-400 flex items-center gap-2 uppercase tracking-[0.2em] border-b border-slate-800 pb-2"><List size={16} className="text-yellow-500"/>其他類別交易明細</h3>
+                              <div className="space-y-2">
+                                {otherTransactions.map((e, idx) => (
+                                  <div key={idx} className="bg-[#0e1630]/60 border border-slate-800/50 p-4 rounded-2xl shadow-sm flex flex-col gap-2">
+                                    <div className="flex justify-between items-start">
+                                      <div className="flex items-center gap-3">
+                                        <span className="text-[10px] font-black text-slate-600">{e.time}</span>
+                                        <span className="text-xs font-bold text-slate-200">其他收入匯總項目</span>
+                                        <span className="px-2 py-0.5 rounded text-[8px] bg-slate-900 border border-slate-800 text-slate-500">{e.paymentMethod || '現金'}</span>
+                                      </div>
+                                      <div className="flex flex-col items-end gap-1">
+                                        <span className="text-sm font-black text-yellow-500">${e.total}</span>
+                                        {e.note && <div className="text-[11px] text-yellow-400/80 italic text-right max-w-[200px]">註: {e.note}</div>}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
-                        <div className="text-right">
-                          <div className="text-sm font-black text-white">× {data.count}</div>
-                          <div className="text-xs font-bold text-emerald-500">${data.subtotal}</div>
+                      );
+                    })()
+                  ) : (
+                    (allPaymentMethods || []).map(method => {
+                      const group = day.paymentGroups[method.name];
+                      if (!group) return null;
+                      return (
+                        <div key={method.name} className="space-y-4 animate-in fade-in duration-300">
+                          <h3 className="text-[11px] font-black text-slate-400 flex items-center gap-2 uppercase tracking-[0.2em] border-b border-slate-800 pb-2">
+                            {method.name === '現金' ? <Banknote size={16} className="text-emerald-500"/> : method.name === '轉帳' ? <ArrowRightLeft size={16} className="text-blue-500"/> : <CreditCard size={16} className="text-yellow-500"/>}
+                            {method.name} 結算 <span className="ml-auto text-white">${group.total}</span>
+                          </h3>
+                          {method.name === '現金' ? (
+                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                              {(() => {
+                                const standardEntries = [];
+                                let cashOtherSum = 0;
+                                Object.entries(group.items).forEach(([name, data]) => {
+                                  const prod = allProducts.find(p => p.name === name);
+                                  if (prod?.category === '其他') cashOtherSum += data.subtotal;
+                                  else standardEntries.push({ name, ...data });
+                                });
+                                return (
+                                  <>
+                                    {standardEntries.map((data) => (
+                                      <div key={data.name} className="bg-[#0e1630]/60 border border-slate-800/50 p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                                        <div><div className="text-sm font-bold text-slate-200">{data.name}</div><div className="text-[10px] text-slate-500">${data.price} / 單位</div></div>
+                                        <div className="text-right"><div className="text-sm font-black text-white">x {data.count}</div><div className="text-xs font-bold text-emerald-500">${data.subtotal}</div></div>
+                                      </div>
+                                    ))}
+                                    {cashOtherSum !== 0 && (
+                                      <div className="bg-yellow-500/10 border border-yellow-500/30 p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                                        <div><div className="text-sm font-black text-yellow-500">其他收入彙總</div><div className="text-[10px] text-slate-500">混合金額</div></div>
+                                        <div className="text-right"><div className="text-sm font-black text-white">1 筆</div><div className="text-xs font-black text-yellow-500">${cashOtherSum}</div></div>
+                                      </div>
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          ) : method.name === '轉帳' ? (
+                            <div className="bg-[#0e1630]/40 rounded-2xl border border-slate-800/30 overflow-hidden">
+                              <div className="divide-y divide-slate-800/30">
+                                {(group.txns || []).map((t, idx) => (
+                                  <div key={idx} className="p-3 px-4 hover:bg-white/5 transition-colors">
+                                    <div className="flex items-center justify-between">
+                                      <div className="flex items-center gap-3"><Clock size={12} className="text-slate-600"/><span className="text-[11px] font-bold text-slate-400">{t.time}</span><span className="text-xs text-slate-300 line-clamp-1 italic">{(t.items || []).map(it => `${it.name}x${it.quantity}`).join(', ')}</span></div>
+                                      <div className="flex flex-col items-end gap-1">
+                                        <span className="text-sm font-black text-blue-400">${t.total}</span>
+                                        {t.note && <div className="text-[10px] text-yellow-500/70 italic text-right max-w-[180px]">註: {t.note}</div>}
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2">
+                              {(group.txns || []).map((t, idx) => (
+                                <div key={idx} className="bg-[#0e1630]/60 border border-slate-800/50 p-3 rounded-xl flex flex-col items-center justify-center shadow-sm">
+                                  <span className="text-[9px] font-bold text-slate-600 uppercase mb-1">{t.time}</span>
+                                  <span className="text-lg font-black text-white">${t.total}</span>
+                                  {t.note && <span className="text-[9px] text-yellow-500/60 mt-1 truncate w-full text-center">註: {t.note}</span>}
+                                </div>
+                              ))}
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    ))}
-                  </div>
+                      );
+                    })
+                  )}
                 </div>
 
                 <div className="border-t border-slate-800/50">
-                  <div className="px-6 py-3 border-b border-slate-800/20 flex items-center gap-2 text-[10px] font-black text-slate-600 uppercase tracking-widest"><List size={14} /> 流水帳明細</div>
-                  <div className="divide-y divide-slate-800/20">
-                    {day.records.map(record => (
-                      <div key={record.id} className="px-6 py-4 flex justify-between items-start hover:bg-slate-800/10 transition-colors">
-                        <div className="space-y-2 flex-1">
-                          <div className="text-[10px] font-black text-slate-600 tracking-widest">{record.time}</div>
-                          <div className="text-xs font-medium text-slate-400 flex flex-wrap gap-1.5">
-                            {record.items.map((it, i) => (
-                              <span key={i} className="bg-slate-900/80 px-2 py-0.5 rounded text-[10px] border border-slate-800/50">{it.name} <span className="text-slate-600">×</span> {it.quantity}</span>
-                            ))}
+                  <button className="w-full p-4 flex items-center gap-2 text-[10px] font-black text-slate-600 hover:text-slate-400 transition-colors uppercase tracking-widest"><List size={14} /> 完整交易記錄</button>
+                  <div className="divide-y divide-slate-800/30">
+                    {(day.records || []).map(record => {
+                      const isFocusedSearch = searchMatches[currentSearchIndex]?.traceId === record.traceId;
+                      const isHighlightedOrder = record.traceId === highlightedTraceId;
+                      const getPayBadge = (mName) => {
+                        const m = allPaymentMethods.find(x => x.name === mName) || { name: '現金', color: 'yellow' };
+                        const styleMap = { yellow: { icon: <Banknote size={10}/>, color: 'text-yellow-500' }, emerald: { icon: <Banknote size={10}/>, color: 'text-emerald-500' }, blue: { icon: <ArrowRightLeft size={10}/>, color: 'text-blue-500' }, purple: { icon: <CreditCard size={10}/>, color: 'text-purple-500' }, rose: { icon: <CreditCard size={10}/>, color: 'text-rose-500' }, cyan: { icon: <CreditCard size={10}/>, color: 'text-cyan-500' } };
+                        const style = styleMap[m.color] || styleMap.yellow;
+                        return (<span className={`flex items-center gap-1 bg-slate-900 px-2 py-0.5 rounded ${style.color} border border-slate-800`}>{style.icon} {mName || '現金'}</span>);
+                      };
+                      return (
+                        <div key={record.id} id={`record-${record.traceId}`} className={`px-6 py-4 flex justify-between items-start transition-all duration-500 ${isFocusedSearch ? 'bg-blue-500/20 ring-2 ring-blue-500 z-10' : isHighlightedOrder ? 'bg-yellow-500/20 ring-2 ring-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.3)]' : 'hover:bg-slate-800/10'}`}>
+                          <div className="space-y-1.5 flex-1 pr-4">
+                            <div className="text-[10px] font-black text-slate-600 flex items-center gap-3">
+                              <span>{record.time}</span>
+                              {getPayBadge(record.paymentMethod)}
+                              {isHighlightedOrder && <span className="bg-yellow-500 text-black text-[8px] px-1.5 py-0.5 rounded animate-pulse">剛剛加入</span>}
+                              {isFocusedSearch && <span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded">搜尋結果</span>}
+                            </div>
+                            <div className="text-xs font-medium text-slate-300 flex flex-wrap gap-1">
+                              {(record.items || []).map((it, i) => (<span key={i} className="bg-slate-900 px-2 py-0.5 rounded text-[10px] border border-slate-800 flex items-center gap-1.5">{it && it.category && <span className="text-[8px] text-slate-500 border-r border-slate-700 pr-1.5 leading-none h-3 flex items-center">{it.category}</span>}<span>{it ? it.name : ''}</span><span className="text-slate-500 mx-0.5 font-bold">x</span><span>{it ? it.quantity : 0}</span></span>))}
+                            </div>
                           </div>
-                          {record.note && <div className="text-sm text-yellow-500/80 bg-yellow-500/5 px-3 py-2 rounded-xl mt-2 border border-yellow-500/10 italic">註: {record.note}</div>}
+                          <div className="flex flex-col items-end gap-1.5 ml-4">
+                            <span className="font-black text-slate-200 text-sm">${record.total}</span>
+                            {record.note && (
+                              <div className="text-xs tracking-wide font-medium text-right max-w-[200px]">
+                                {searchQuery && record.note.includes(searchQuery) ? (
+                                  <span className="text-slate-400">{record.note.split(searchQuery).map((part, i, arr) => (<React.Fragment key={i}>{part}{i !== arr.length - 1 && (<mark className="bg-yellow-500 text-black font-black px-0.5 rounded">{searchQuery}</mark>)}</React.Fragment>))}</span>
+                                ) : ( <span className="text-yellow-400/70 italic">註: {record.note}</span> )}
+                              </div>
+                            )}
+                            <button onClick={() => requestDeleteRecord(record.id)} className="text-slate-800 hover:text-red-500/50 p-1 transition-colors mt-1"><Trash2 size={14} /></button>
+                          </div>
                         </div>
-                        <div className="flex flex-col items-end gap-2 ml-4 shrink-0">
-                          <span className="font-black text-slate-200 text-sm tracking-tight">${record.total}</span>
-                          <button onClick={() => requestDeleteRecord(record.id)} className="text-slate-800 hover:text-red-500 p-1.5 transition-colors bg-slate-900/50 rounded-lg"><Trash2 size={14} /></button>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               </div>
             ))}
+            {renderPagination()}
           </div>
         )}
       </main>
 
       {productToDelete && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-[110] p-4">
-          <div className="bg-[#0e1630] border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-sm w-full animate-in zoom-in-95 duration-200">
-            <h3 className="text-xl font-bold text-white mb-4 italic">確認刪除</h3>
-            <p className="text-slate-400 mb-6 text-sm leading-relaxed">確定要將「<span className="text-yellow-500 font-bold">{productToDelete.name}</span>」從系統中移除嗎？此動作不可撤回。</p>
-            <div className="flex justify-end gap-3">
-              <button onClick={() => setProductToDelete(null)} className="px-5 py-2 text-slate-500 font-bold">取消</button>
-              <button onClick={confirmDelete} className="px-5 py-2 bg-red-500 text-white rounded-xl font-bold shadow-lg shadow-red-500/10">確認移除</button>
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[110] p-4">
+          <div className="bg-[#0e1630] border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-sm w-full">
+            <h3 className="text-xl font-bold text-white mb-4">確認刪除品項</h3>
+            <p className="text-slate-400 mb-6">確定將「<span className="text-yellow-500">{productToDelete.name}</span>」從選單中刪除嗎？</p>
+            <div className="flex justify-end gap-3"><button onClick={() => setProductToDelete(null)} className="px-5 py-2 text-slate-400 font-bold">取消</button><button onClick={confirmDelete} className="px-5 py-2 bg-red-500 text-white rounded-xl font-bold">確定刪除</button></div>
+          </div>
+        </div>
+      )}
+
+      {showMobileCart && (
+        <div className="fixed inset-0 bg-black/90 z-[100] animate-in fade-in">
+          <div className="absolute bottom-0 left-0 right-0 bg-[#0e1630] rounded-t-[40px] p-5 max-h-[95vh] flex flex-col border-t border-slate-800 shadow-[0_-20px_50px_rgba(0,0,0,0.5)]">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-lg font-black text-white flex items-center gap-2"><ShoppingCart size={20} className="text-yellow-500" />點單確認 ({(currentSale || []).length})</h2>
+              <button onClick={() => setShowMobileCart(false)} className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-slate-400"><X size={18} /></button>
+            </div>
+            <div className="flex-1 overflow-y-auto space-y-2 mb-4 pr-1 custom-scrollbar">
+              {(currentSale || []).map((item, idx) => (
+                <div key={idx} className="flex justify-between items-center bg-[#070b1a] py-2 px-3 rounded-xl border border-slate-800/50">
+                  <div className="flex-1 min-w-0 pr-4"><div className="text-lg font-black text-white truncate leading-tight">{item.name}</div><div className="text-sm text-slate-500 font-bold">${item.price} × {item.quantity}</div></div>
+                  <div className="flex items-center gap-3 shrink-0"><div className="text-xl font-black text-yellow-500 tracking-tighter">${(item.price || 0) * (item.quantity || 1)}</div><button onClick={() => setCurrentSale(currentSale.filter((_, i) => i !== idx))} className="text-red-500/50 p-1.5 active:text-red-500"><Trash2 size={16} /></button></div>
+                </div>
+              ))}
+            </div>
+            <div className="space-y-3 pt-3 border-t border-slate-800/50">
+              <div className="space-y-2">
+                <div className="flex flex-wrap gap-2 overflow-x-auto no-scrollbar pb-1">
+                  {(allPaymentMethods || []).map(m => (<button key={m.name} onClick={() => setSelectedPayment(m.name)} className={`px-4 py-2 rounded-xl text-xs font-black whitespace-nowrap border transition-all ${getPayColorClass(m.name, selectedPayment === m.name)}`}>{m.name}</button>))}
+                </div>
+              </div>
+              <div className="flex gap-3 items-center">
+                <textarea value={dailyNote} onChange={e => setDailyNote(e.target.value)} placeholder="備註…" className="flex-1 bg-[#070b1a] border border-slate-800 rounded-xl p-2 text-[10px] text-slate-400 h-10 outline-none resize-none" />
+                <div className="text-right shrink-0"><span className="text-slate-500 font-bold uppercase text-[9px] block">應收總計</span><span className="text-2xl font-black text-white leading-none">${cartTotal}</span></div>
+              </div>
+              <button onClick={checkout} disabled={(currentSale || []).length===0} className="w-full py-4 rounded-xl bg-yellow-500 text-black font-black text-base active:scale-[0.98] transition-all">確認送出訂單</button>
             </div>
           </div>
         </div>
       )}
+
+      <style>{`
+        @media (max-width: 768px) {
+          html, body { touch-action: pan-y !important; user-scalable: no; overflow-x: hidden; width: 100%; position: relative; }
+          input, textarea, select { font-size: 16px !important; }
+        }
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
+        body { background-color: #070b1a; }
+        mark { background-color: #eab308; color: black; padding: 0 2px; border-radius: 2px; }
+        input[type="date"]::-webkit-calendar-picker-indicator { background: transparent; bottom: 0; color: transparent; cursor: pointer; height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto; }
+        input[type="month"]::-webkit-calendar-picker-indicator { background: transparent; bottom: 0; color: transparent; cursor: pointer; height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto; }
+      `}</style>
     </div>
   );
 };
 
 export default App;
+
 
