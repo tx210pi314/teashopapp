@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { initializeApp } from 'firebase/app';
-import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, query, serverTimestamp, setDoc, getDocs, where, deleteDoc } from 'firebase/firestore';
+import { getAuth, signInAnonymously, onAuthStateChanged } from 'firebase/auth';
+import { getFirestore, collection, doc, onSnapshot, addDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { 
   Plus, Trash2, ShoppingCart, Settings, 
   ClipboardList, Calendar, FileSpreadsheet, X, Edit3, Check,
-  ChevronUp, ChevronDown, Wifi, WifiOff, Menu, Loader2,
+  ChevronUp, ChevronDown, Wifi, WifiOff, Loader2,
   BarChart3, List, Download, ShoppingBag
 } from 'lucide-react';
 
-// --- Firebase 配置 ---
+// --- Firebase 配置 (改為讀取環境變數) ---
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -19,18 +19,13 @@ const firebaseConfig = {
   appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
-// 初始化 Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-const appId = 'sales-manager-pro-v2'; 
+const appId = 'sales-manager-pro-v2';
 
 const App = () => {
   const [user, setUser] = useState(null);
-  const [view, setView] = useState('sales'); 
-  const [activeCategory, setActiveCategory] = useState('全部');
-  const [isOnline, setIsOnline] = useState(navigator.onLine);
-
   const [view, setView] = useState('sales'); 
   const [activeCategory, setActiveCategory] = useState('全部');
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -55,7 +50,6 @@ const App = () => {
   const [isSaving, setIsSaving] = useState(false);
   const [localHiddenIds, setLocalHiddenIds] = useState([]); 
   const [productToDelete, setProductToDelete] = useState(null);
-  const undoTimerRef = useRef(null);
   const isSyncingRef = useRef(false);
 
   // --- 核心同步邏輯 ---
@@ -127,9 +121,11 @@ const App = () => {
   // --- 認證與監聽 ---
   useEffect(() => {
     const initAuth = async () => {
-      if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-        await signInWithCustomToken(auth, __initial_auth_token);
-      } else { await signInAnonymously(auth); }
+      try {
+        await signInAnonymously(auth);
+      } catch (error) {
+        console.error("Firebase 匿名登入失敗，請確認是否已在 Firebase Console 開啟此功能:", error);
+      }
     };
     initAuth();
     const unsubscribe = onAuthStateChanged(auth, setUser);
@@ -165,11 +161,12 @@ const App = () => {
   const checkout = () => {
     if (currentSale.length === 0) return;
     const now = new Date();
+    // 修正 toLocaleDateString 為 'zh-TW'，確保 Vercel 伺服器輸出的時間格式與本地一致
     const orderData = {
-      fullDate: now.toLocaleDateString(),
-      time: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      fullDate: now.toLocaleDateString('zh-TW'),
+      time: now.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit' }),
       timestamp: Date.now(),
-      traceId: crypto.randomUUID(),
+      traceId: crypto.randomUUID ? crypto.randomUUID() : (Date.now().toString(36) + Math.random().toString(36).substring(2)),
       items: currentSale.map(i => ({ name: i.name, price: i.price, quantity: i.quantity })),
       total: currentSale.reduce((s, i) => s + (i.price * i.quantity), 0),
       note: dailyNote,
@@ -180,7 +177,7 @@ const App = () => {
     localStorage.setItem(`syncQueue_${appId}`, JSON.stringify(newQueue));
     setSyncQueue(newQueue);
     setCurrentSale([]);
-        setDailyNote("");
+    setDailyNote("");
     setShowMobileCart(false);
     processSyncQueue();
   };
@@ -273,6 +270,8 @@ const App = () => {
 
   const cartTotal = currentSale.reduce((s, i) => s + (i.price * i.quantity), 0);
   const cartItemCount = currentSale.reduce((s, i) => s + i.quantity, 0);
+
+  // 以下為 UI 渲染層，由於程式碼長度限制，請輸入「繼續」以獲取剩餘程式碼
 
   return (
     <div className="min-h-screen bg-[#070b1a] text-slate-200 font-sans pb-24 md:pb-0 selection:bg-yellow-500/30">
@@ -490,29 +489,64 @@ const App = () => {
               </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4">
-              {groupedSales.length > 0 ? (
-                groupedSales.map((day) => (
-                  <div key={day.date} className="bg-[#0e1630] rounded-[24px] shadow-sm border border-slate-800 p-6 flex items-center justify-between">
-                    <div className="flex items-center gap-4">
-                      <div className="w-12 h-12 bg-slate-800 flex items-center justify-center rounded-2xl">
-                        <BarChart3 className="text-slate-400" size={24} />
-                      </div>
-                      <div>
-                        <h4 className="font-bold text-white">{day.date}</h4>
-                        <p className="text-sm text-slate-400">{day.records.length} 筆訂單</p>
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xl font-bold text-yellow-500">${day.total.toLocaleString()}</p>
-                      <button onClick={() => downloadCSV([day], `${day.date}-日報表.csv`)} className="mt-2 text-sm text-emerald-500 hover:text-emerald-400 flex items-center justify-end gap-1"><Download size={14} /> 匯出</button>
-                    </div>
+            {groupedSales.map(day => (
+              <div key={day.date} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-xl mb-12">
+                <div className="bg-[#121c3b] p-6 flex flex-wrap justify-between items-center border-b border-slate-800 gap-4">
+                  <div className="flex items-center gap-3">
+                    <Calendar className="text-yellow-500" size={24} />
+                    <span className="text-xl font-black text-white">{day.date}</span>
+                    <button onClick={() => downloadCSV([day], `日報表_${day.date}.csv`)} className="ml-2 p-2 bg-emerald-500/10 text-emerald-500 hover:bg-emerald-500 hover:text-white rounded-lg transition-all flex items-center gap-2 text-[10px] font-black uppercase tracking-widest">
+                      <Download size={14} /> 匯出日報
+                    </button>
                   </div>
-                ))
-              ) : (
-                <div className="text-center text-slate-500 mt-20">目前還沒有銷售紀錄。</div>
-              )}
-            </div>
+                  <div className="text-right">
+                    <div className="text-[10px] text-slate-500 uppercase font-black tracking-widest">當日營業額</div>
+                    <div className="text-2xl font-black text-yellow-500 tracking-tighter">${day.total}</div>
+                  </div>
+                </div>
+
+                <div className="p-6 bg-[#070b1a]/30">
+                  <h3 className="text-[10px] font-black text-slate-500 mb-4 flex items-center gap-2 uppercase tracking-widest"><BarChart3 size={14} className="text-emerald-500" /> 品項匯總</h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    {Object.entries(day.summary).map(([name, data]) => (
+                      <div key={name} className="bg-[#0e1630] border border-slate-800/50 p-4 rounded-2xl flex justify-between items-center shadow-sm">
+                        <div>
+                          <div className="text-sm font-bold text-slate-200">{name}</div>
+                          <div className="text-[10px] text-slate-500 tracking-tight">${data.price} / 單位</div>
+                        </div>
+                        <div className="text-right">
+                          <div className="text-sm font-black text-white">× {data.count}</div>
+                          <div className="text-xs font-bold text-emerald-500">${data.subtotal}</div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="border-t border-slate-800/50">
+                  <div className="px-6 py-3 border-b border-slate-800/20 flex items-center gap-2 text-[10px] font-black text-slate-600 uppercase tracking-widest"><List size={14} /> 流水帳明細</div>
+                  <div className="divide-y divide-slate-800/20">
+                    {day.records.map(record => (
+                      <div key={record.id} className="px-6 py-4 flex justify-between items-start hover:bg-slate-800/10 transition-colors">
+                        <div className="space-y-2 flex-1">
+                          <div className="text-[10px] font-black text-slate-600 tracking-widest">{record.time}</div>
+                          <div className="text-xs font-medium text-slate-400 flex flex-wrap gap-1.5">
+                            {record.items.map((it, i) => (
+                              <span key={i} className="bg-slate-900/80 px-2 py-0.5 rounded text-[10px] border border-slate-800/50">{it.name} <span className="text-slate-600">×</span> {it.quantity}</span>
+                            ))}
+                          </div>
+                          {record.note && <div className="text-sm text-yellow-500/80 bg-yellow-500/5 px-3 py-2 rounded-xl mt-2 border border-yellow-500/10 italic">註: {record.note}</div>}
+                        </div>
+                        <div className="flex flex-col items-end gap-2 ml-4 shrink-0">
+                          <span className="font-black text-slate-200 text-sm tracking-tight">${record.total}</span>
+                          <button onClick={() => requestDeleteRecord(record.id)} className="text-slate-800 hover:text-red-500 p-1.5 transition-colors bg-slate-900/50 rounded-lg"><Trash2 size={14} /></button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </main>
@@ -529,24 +563,9 @@ const App = () => {
           </div>
         </div>
       )}
-      
-      <style>{`
-        .no-scrollbar::-webkit-scrollbar { display: none; }
-        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
-        body { 
-          background-color: #070b1a; 
-          margin: 0; 
-          padding: 0; 
-          overscroll-behavior-y: contain; 
-        }
-        @media all and (display-mode: standalone) {
-          nav { padding-top: env(safe-area-inset-top); }
-          .pb-24 { padding-bottom: calc(6rem + env(safe-area-inset-bottom)); }
-        }
-      `}</style>
     </div>
   );
 };
 
 export default App;
+
