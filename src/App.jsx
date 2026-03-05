@@ -307,11 +307,19 @@ const App = () => {
         
         (record.items || []).forEach(item => {
           if (!item || !item.name) return;
-          if (!groups[date].paymentGroups[payMethod].items[item.name]) { 
-            groups[date].paymentGroups[payMethod].items[item.name] = { count: 0, subtotal: 0, price: item.price || 0 }; 
+          // [變更點] 這裡將原始存入的項目名稱加上分類前綴，供報表與結算渲染使用
+          const itemKey = item.category ? `[${item.category}] ${item.name}` : item.name;
+          if (!groups[date].paymentGroups[payMethod].items[itemKey]) { 
+            groups[date].paymentGroups[payMethod].items[itemKey] = { 
+              count: 0, 
+              subtotal: 0, 
+              price: item.price || 0,
+              originalName: item.name,
+              category: item.category || '其他'
+            }; 
           }
-          groups[date].paymentGroups[payMethod].items[item.name].count += (item.quantity || 1);
-          groups[date].paymentGroups[payMethod].items[item.name].subtotal += ((item.price || 0) * (item.quantity || 1));
+          groups[date].paymentGroups[payMethod].items[itemKey].count += (item.quantity || 1);
+          groups[date].paymentGroups[payMethod].items[itemKey].subtotal += ((item.price || 0) * (item.quantity || 1));
         });
       } catch (e) { console.error("Error grouping sales", e); }
     });
@@ -379,9 +387,11 @@ const App = () => {
           if (it.category === '其他') {
             otherSum += ((it.price || 0) * (it.quantity || 1));
           } else {
-            if (!itemSummary[it.name]) itemSummary[it.name] = { count: 0, subtotal: 0 };
-            itemSummary[it.name].count += (it.quantity || 1);
-            itemSummary[it.name].subtotal += ((it.price || 0) * (it.quantity || 1));
+            // [變更點] 匯出 CSV 的統計數量加上分類前綴
+            const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
+            if (!itemSummary[displayName]) itemSummary[displayName] = { count: 0, subtotal: 0 };
+            itemSummary[displayName].count += (it.quantity || 1);
+            itemSummary[displayName].subtotal += ((it.price || 0) * (it.quantity || 1));
           }
         });
       });
@@ -396,7 +406,8 @@ const App = () => {
     csv += "【 完整交易記錄 】\n交易日期,時間,金額,付款方式,內容,註\n";
     (daysList || []).forEach(day => {
       (day?.records || []).forEach(record => {
-        const itemSummaryStr = (record?.items || []).map(it => `${it?.name || '未知'}x${it?.quantity || 1}`).join('; ');
+        // [變更點] 匯出 CSV 的明細也加上分類前綴
+        const itemSummaryStr = (record?.items || []).map(it => `${it?.category ? `[${it.category}] ` : ''}${it?.name || '未知'}x${it?.quantity || 1}`).join('; ');
         csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${itemSummaryStr}","${record?.note || ''}"\n`;
       });
     });
@@ -1198,9 +1209,11 @@ const App = () => {
                       (day.records || []).forEach(r => {
                         (r?.items || []).forEach(it => {
                           if (it && it.category !== '其他') {
-                            if (!standardItems[it.name]) { standardItems[it.name] = { count: 0, subtotal: 0, price: it.price || 0 }; }
-                            standardItems[it.name].count += (it.quantity || 1);
-                            standardItems[it.name].subtotal += ((it.price || 0) * (it.quantity || 1));
+                            // [變更點] 報表畫面的統計數量加上分類前綴
+                            const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
+                            if (!standardItems[displayName]) { standardItems[displayName] = { count: 0, subtotal: 0, price: it.price || 0 }; }
+                            standardItems[displayName].count += (it.quantity || 1);
+                            standardItems[displayName].subtotal += ((it.price || 0) * (it.quantity || 1));
                           }
                         });
                       });
@@ -1268,10 +1281,11 @@ const App = () => {
                               {(() => {
                                 const standardEntries = [];
                                 let cashOtherSum = 0;
-                                Object.entries(group?.items || {}).forEach(([name, data]) => {
-                                  const prod = (allProducts || []).find(p => p && p.name === name);
-                                  if (prod?.category === '其他') cashOtherSum += (data?.subtotal || 0);
-                                  else standardEntries.push({ name, ...data });
+                                Object.entries(group?.items || {}).forEach(([key, data]) => {
+                                  // [變更點] 配合加上前綴的 key，這裡不再用名字去 allProducts 找，直接用當初留存的 category
+                                  const cat = data.category || ((allProducts || []).find(p => p && p.name === data.originalName)?.category);
+                                  if (cat === '其他') cashOtherSum += (data?.subtotal || 0);
+                                  else standardEntries.push({ name: key, ...data });
                                 });
                                 return (
                                   <>
@@ -1448,5 +1462,3 @@ const App = () => {
 };
 
 export default App;
-
-
