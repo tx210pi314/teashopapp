@@ -405,7 +405,8 @@ const App = () => {
     (daysList || []).forEach(day => {
       (day?.records || []).forEach(record => {
         const itemSummaryStr = (record?.items || []).map(it => `${it?.category ? `[${it.category}] ` : ''}${it?.name || '未知'}x${it?.quantity || 1}`).join('; ');
-        csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${record?.note || ''}"\n`;
+        // 這裡將剛剛遺漏的 itemSummaryStr 補回，確保 CSV 欄位對齊
+        csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${itemSummaryStr}","${record?.note || ''}"\n`;
       });
     });
     csv += "\n";
