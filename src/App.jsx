@@ -401,11 +401,13 @@ const App = () => {
     if (otherSum !== 0) csv += `其他收入彙總,1,${otherSum}\n`;
     csv += "\n";
 
+    // --- [變更點] 建立一個新的陣列，將日期由舊到新（由上到下遞增）排序 ---
+    const ascendingDaysList = [...(daysList || [])].sort((a, b) => new Date(a.date) - new Date(b.date));
+
     csv += "【 完整交易記錄 】\n交易日期,時間,金額,付款方式,內容,註\n";
-    (daysList || []).forEach(day => {
+    ascendingDaysList.forEach(day => {
       (day?.records || []).forEach(record => {
         const itemSummaryStr = (record?.items || []).map(it => `${it?.category ? `[${it.category}] ` : ''}${it?.name || '未知'}x${it?.quantity || 1}`).join('; ');
-        // 這裡將剛剛遺漏的 itemSummaryStr 補回，確保 CSV 欄位對齊
         csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${itemSummaryStr}","${record?.note || ''}"\n`;
       });
     });
@@ -414,7 +416,7 @@ const App = () => {
     const appendAppendix = (methodName) => {
       let appendCsv = `【 附錄：${methodName} 交易細項 】\n日期,時間,金額\n`;
       let hasAny = false;
-      (daysList || []).forEach(day => {
+      ascendingDaysList.forEach(day => {
         (day?.records || []).forEach(record => {
           if (record?.paymentMethod === methodName) {
             appendCsv += `${day?.date || ''},${record?.time || ''},${record?.total || 0}\n`;
@@ -434,11 +436,11 @@ const App = () => {
       }
     });
 
-    // --- [新增功能] 其他類別交易明細彙整 ---
+    // --- 其他類別交易明細彙整 ---
     let otherTxnCsv = `【 附錄：其他類別交易明細 】\n交易日期,時間,金額,付款方式,備註\n`;
     let hasOtherTxns = false;
     
-    (daysList || []).forEach(day => {
+    ascendingDaysList.forEach(day => {
       (day?.records || []).forEach(record => {
         // 篩選出包含「其他」類別的項目
         const otherItems = (record?.items || []).filter(it => it && it.category === '其他');
