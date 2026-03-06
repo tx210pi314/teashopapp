@@ -307,7 +307,6 @@ const App = () => {
         
         (record.items || []).forEach(item => {
           if (!item || !item.name) return;
-          // [變更點] 這裡將原始存入的項目名稱加上分類前綴，供報表與結算渲染使用
           const itemKey = item.category ? `[${item.category}] ${item.name}` : item.name;
           if (!groups[date].paymentGroups[payMethod].items[itemKey]) { 
             groups[date].paymentGroups[payMethod].items[itemKey] = { 
@@ -387,7 +386,6 @@ const App = () => {
           if (it.category === '其他') {
             otherSum += ((it.price || 0) * (it.quantity || 1));
           } else {
-            // [變更點] 匯出 CSV 的統計數量加上分類前綴
             const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
             if (!itemSummary[displayName]) itemSummary[displayName] = { count: 0, subtotal: 0 };
             itemSummary[displayName].count += (it.quantity || 1);
@@ -406,9 +404,8 @@ const App = () => {
     csv += "【 完整交易記錄 】\n交易日期,時間,金額,付款方式,內容,註\n";
     (daysList || []).forEach(day => {
       (day?.records || []).forEach(record => {
-        // [變更點] 匯出 CSV 的明細也加上分類前綴
         const itemSummaryStr = (record?.items || []).map(it => `${it?.category ? `[${it.category}] ` : ''}${it?.name || '未知'}x${it?.quantity || 1}`).join('; ');
-        csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${itemSummaryStr}","${record?.note || ''}"\n`;
+        csv += `${day?.date || ''},${record?.time || ''},${record?.total || 0},${record?.paymentMethod || '現金'},"${record?.note || ''}"\n`;
       });
     });
     csv += "\n";
@@ -435,6 +432,31 @@ const App = () => {
         csv += appendAppendix(m.name);
       }
     });
+
+    // --- [新增功能] 其他類別交易明細彙整 ---
+    let otherTxnCsv = `【 附錄：其他類別交易明細 】\n交易日期,時間,金額,付款方式,備註\n`;
+    let hasOtherTxns = false;
+    
+    (daysList || []).forEach(day => {
+      (day?.records || []).forEach(record => {
+        // 篩選出包含「其他」類別的項目
+        const otherItems = (record?.items || []).filter(it => it && it.category === '其他');
+        if (otherItems.length > 0) {
+          // 計算該筆交易中屬於「其他」類別的總金額
+          const totalOtherAmount = otherItems.reduce((sum, it) => sum + ((it.price || 0) * (it.quantity || 1)), 0);
+          // 確保備註內容如果包含逗號，在 CSV 中不會跑版
+          const safeNote = record?.note ? `"${record.note.replace(/"/g, '""')}"` : '""';
+          
+          otherTxnCsv += `${day?.date || ''},${record?.time || ''},${totalOtherAmount},${record?.paymentMethod || '現金'},${safeNote}\n`;
+          hasOtherTxns = true;
+        }
+      });
+    });
+    
+    // 如果當月有其他交易，就把這個附錄加進報表的最底下
+    if (hasOtherTxns) {
+      csv += otherTxnCsv + "\n";
+    }
 
     return csv;
   };
@@ -1209,7 +1231,6 @@ const App = () => {
                       (day.records || []).forEach(r => {
                         (r?.items || []).forEach(it => {
                           if (it && it.category !== '其他') {
-                            // [變更點] 報表畫面的統計數量加上分類前綴
                             const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
                             if (!standardItems[displayName]) { standardItems[displayName] = { count: 0, subtotal: 0, price: it.price || 0 }; }
                             standardItems[displayName].count += (it.quantity || 1);
@@ -1282,7 +1303,6 @@ const App = () => {
                                 const standardEntries = [];
                                 let cashOtherSum = 0;
                                 Object.entries(group?.items || {}).forEach(([key, data]) => {
-                                  // [變更點] 配合加上前綴的 key，這裡不再用名字去 allProducts 找，直接用當初留存的 category
                                   const cat = data.category || ((allProducts || []).find(p => p && p.name === data.originalName)?.category);
                                   if (cat === '其他') cashOtherSum += (data?.subtotal || 0);
                                   else standardEntries.push({ name: key, ...data });
