@@ -146,7 +146,10 @@ const App = () => {
   const [localHiddenIds, setLocalHiddenIds] = useState([]); 
   const [undoItem, setUndoItem] = useState(null); 
   const [productToDelete, setProductToDelete] = useState(null);
-  const [highlightedTraceId, setHighlightedTraceId] = useState(null); 
+  
+  // 滑動與標記狀態 (分離職責)
+  const [newOrderTraceId, setNewOrderTraceId] = useState(null); // 專門給「剛剛加入」黃框用
+  const [scrollTargetId, setScrollTargetId] = useState(null); // 通用滑動目標 ID
   
   const [searchQuery, setSearchQuery] = useState("");
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
@@ -565,17 +568,19 @@ const App = () => {
     setSelectedPayment("現金"); 
     setShowMobileCart(false); 
     setView('reports'); 
-    setHighlightedTraceId(traceId); 
+    
+    // 設定這筆記錄為新結帳，並且執行平滑滑動
+    setNewOrderTraceId(traceId);
+    setScrollTargetId(`record-${traceId}`); 
     setCurrentPage(1); 
     
-    setTimeout(() => setHighlightedTraceId(null), 5000); 
+    setTimeout(() => setNewOrderTraceId(null), 5000); 
     processSyncQueue();
   };
 
   // --- 編輯專用邏輯 ---
   const startEditingRecord = (record) => {
     setEditingRecord(record);
-    // 使用深度拷貝預載原本內容，確保不會意外改動到外部狀態
     setEditCart(JSON.parse(JSON.stringify(record.items || [])));
     setEditNote(record.note || "");
     setEditPayment(record.paymentMethod || "現金");
@@ -592,7 +597,6 @@ const App = () => {
   };
 
   const handleEditComplete = async () => {
-    // 若清空購物車，跳出確認對話框
     if (!editCart || editCart.length === 0) {
       setShowEmptyEditPrompt(true);
       return;
@@ -611,10 +615,11 @@ const App = () => {
         total: updatedTotal,
         note: editNote,
         paymentMethod: editPayment,
-        // 注意：這裡不更新 time 和 fullDate，保留原始的交易時間
         updatedAt: serverTimestamp()
       });
-      setHighlightedTraceId(editingRecord.traceId);
+      
+      // 編輯完成只會滑動到目標，不會觸發「剛剛加入」的黃框
+      setScrollTargetId(`record-${editingRecord.traceId}`);
       cancelEditing();
     } catch (err) { console.error("更新失敗", err); }
   };
@@ -629,14 +634,19 @@ const App = () => {
   const setDisplayPayment = isEditMode ? setEditPayment : setSelectedPayment;
   const displayTotal = (displayCart || []).reduce((s, i) => s + ((i?.price || 0) * (i?.quantity || 1)), 0);
 
-  // 自動捲動到最新或修改後的訂單
+  // 通用的平滑滑動處理機制
   useEffect(() => {
-    if (view === 'reports' && highlightedTraceId) {
+    if (view === 'reports' && scrollTargetId) {
       const scrollTimer = setTimeout(() => {
         if (typeof document !== 'undefined') {
-          const element = document.getElementById(`record-${highlightedTraceId}`);
+          const element = document.getElementById(scrollTargetId);
           if (element) {
-            const targetPosition = element.getBoundingClientRect().top + window.scrollY - (window.innerHeight / 2) + (element.offsetHeight / 2);
+            const isDayBlock = scrollTargetId.startsWith('day-block');
+            // 如果是滑到日期區塊，考量到頂部導航列的高度來做稍微偏移
+            const targetPosition = isDayBlock 
+              ? element.getBoundingClientRect().top + window.scrollY - 80 
+              : element.getBoundingClientRect().top + window.scrollY - (window.innerHeight / 2) + (element.offsetHeight / 2);
+            
             const startPosition = window.scrollY;
             const distance = targetPosition - startPosition;
             let startTime = null;
@@ -658,7 +668,7 @@ const App = () => {
       }, 300);
       return () => clearTimeout(scrollTimer);
     }
-  }, [view, highlightedTraceId, currentPage]);
+  }, [view, scrollTargetId, currentPage]);
 
   const navigateSearch = (direction) => {
     if (!searchMatches || searchMatches.length === 0) return;
@@ -672,7 +682,9 @@ const App = () => {
     
     const targetPage = Math.floor(match.dayIndex / ITEMS_PER_PAGE) + 1;
     if (currentPage !== targetPage) setCurrentPage(targetPage);
-    setHighlightedTraceId(match.traceId);
+    
+    // 讓搜尋結果也能被平滑滑動鎖定
+    setScrollTargetId(`record-${match.traceId}`);
   };
 
   const jumpToDate = (dateStr) => {
@@ -682,13 +694,11 @@ const App = () => {
       const dayIndex = (groupedSales || []).findIndex(d => d && d.date === formattedDate);
       if (dayIndex !== -1) {
         const targetPage = Math.floor(dayIndex / ITEMS_PER_PAGE) + 1; 
-        setCurrentPage(targetPage);
-        setTimeout(() => { 
-          if (typeof document !== 'undefined') {
-            const element = document.getElementById(`day-block-${formattedDate}`); 
-            if (element) element.scrollIntoView({ behavior: 'smooth', block: 'start' }); 
-          }
-        }, 150);
+        if (currentPage !== targetPage) {
+          setCurrentPage(targetPage);
+        }
+        // 使用替換斜線後的乾淨 ID，避免與 CSS 選擇器衝突，並且保證平滑滑動
+        setScrollTargetId(`day-block-${formattedDate.replace(/\//g, '-')}`);
       }
     } catch(e) {}
   };
@@ -862,7 +872,6 @@ const App = () => {
       </nav>
 
       <main className="p-3 md:p-8 max-w-7xl mx-auto">
-        {/* 把 view === 'sales' 替換為 (view === 'sales' || view === 'edit')，讓兩種模式共用相同元件 */}
         {(view === 'sales' || view === 'edit') && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8 space-y-6">
@@ -1236,17 +1245,17 @@ const App = () => {
               </div>
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <div className="relative">
-                  <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
+                  <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500 z-10" />
                   <input 
                     type="month" 
                     value={exportMonth} 
                     onChange={(e) => setExportMonth(e.target.value)} 
-                    className="bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl py-2.5 pl-9 pr-3 outline-none focus:border-emerald-500 transition-all" 
+                    className="h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 outline-none focus:border-emerald-500 transition-all block box-border" 
                   />
                 </div>
                 <button 
                   onClick={exportMonthlyReport} 
-                  className="flex-1 sm:flex-none bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs shadow-lg shadow-emerald-500/10 hover:bg-emerald-500 transition-all"
+                  className="flex-1 sm:flex-none h-[42px] bg-emerald-600 text-white px-5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs shadow-lg shadow-emerald-500/10 hover:bg-emerald-500 transition-all box-border"
                 >
                   <FileSpreadsheet size={16} /> 匯出月報表
                 </button>
@@ -1255,16 +1264,16 @@ const App = () => {
 
             <div className="bg-[#0e1630] border border-slate-800 p-3 rounded-2xl flex flex-col sm:flex-row items-center gap-3 sticky top-[62px] z-[45] shadow-xl">
               <div className="relative flex-1 w-full">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 z-10" />
                 <input 
                   type="text" 
                   placeholder="搜尋關鍵字..." 
-                  className="w-full bg-[#070b1a] border border-slate-800 rounded-xl py-2.5 pl-10 pr-10 text-sm text-white focus:border-yellow-500 outline-none transition-all" 
+                  className="w-full h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-10 text-sm text-white focus:border-yellow-500 outline-none transition-all block box-border" 
                   value={searchQuery} 
                   onChange={(e) => { setSearchQuery(e.target.value); setCurrentSearchIndex(-1); }} 
                 />
                 {searchQuery && (
-                  <button onClick={() => { setSearchQuery(""); setCurrentSearchIndex(-1); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white">
+                  <button onClick={() => { setSearchQuery(""); setCurrentSearchIndex(-1); }} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-white z-10">
                     <X size={16} />
                   </button>
                 )}
@@ -1272,24 +1281,24 @@ const App = () => {
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button 
                   onClick={() => setIsSummarizedView(!isSummarizedView)} 
-                  className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border transition-all text-xs font-black shrink-0 ${isSummarizedView ? 'bg-yellow-500 border-yellow-500 text-black' : 'bg-[#070b1a] border-slate-800 text-slate-400 hover:text-white'}`}
+                  className={`flex items-center justify-center gap-2 px-4 h-[42px] rounded-xl border transition-all text-xs font-black shrink-0 box-border ${isSummarizedView ? 'bg-yellow-500 border-yellow-500 text-black' : 'bg-[#070b1a] border-slate-800 text-slate-400 hover:text-white'}`}
                 >
                   {isSummarizedView ? <LayoutGrid size={16}/> : <Layers size={16}/>}
                   {isSummarizedView ? '統計帳務' : '統計數量'}
                 </button>
                 
                 <div className="relative flex-1 sm:w-40">
-                  <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500" />
+                  <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500 z-10" />
                   <input 
                     type="date" 
-                    className="w-full bg-[#070b1a] border border-slate-800 rounded-xl py-2.5 pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 appearance-none" 
+                    className="w-full h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 block box-border" 
                     value={selectedDateJump} 
                     onChange={(e) => { setSelectedDateJump(e.target.value); jumpToDate(e.target.value); }} 
                   />
                 </div>
                 
                 {(searchMatches || []).length > 0 && (
-                  <div className="flex items-center gap-2 bg-[#070b1a] px-3 py-2 rounded-xl border border-slate-800 shrink-0">
+                  <div className="flex items-center h-[42px] gap-2 bg-[#070b1a] px-3 rounded-xl border border-slate-800 shrink-0 box-border">
                     <span className="text-[10px] font-black text-yellow-500 uppercase tracking-tighter">{currentSearchIndex + 1} / {searchMatches.length}</span>
                     <div className="flex gap-1 ml-1">
                       <button onClick={() => navigateSearch(-1)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><ChevronLeft size={18} /></button>
@@ -1303,7 +1312,7 @@ const App = () => {
             {(!paginatedDays || paginatedDays.length === 0) ? (
               <div className="py-20 text-center text-slate-600 italic">尚無相關銷售紀錄</div>
             ) : paginatedDays.map(day => (
-              <div key={day.date} id={`day-block-${day.date}`} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-2xl mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 scroll-mt-24">
+              <div key={day.date} id={`day-block-${day.date ? day.date.replace(/\//g, '-') : 'unknown'}`} className="bg-[#0e1630] rounded-3xl border border-slate-800 overflow-hidden shadow-2xl mb-12 animate-in fade-in slide-in-from-bottom-4 duration-500 scroll-mt-24">
                 
                 <div className="bg-[#121c3b] p-6 flex justify-between items-center border-b border-slate-800">
                   <div className="flex items-center gap-3">
@@ -1495,15 +1504,16 @@ const App = () => {
                     {(day.records || []).map(record => {
                       if (!record) return null;
                       const isFocusedSearch = currentSearchIndex >= 0 && (searchMatches || [])[currentSearchIndex]?.traceId === record.traceId;
-                      const isHighlightedOrder = highlightedTraceId && record.traceId === highlightedTraceId;
+                      // 只有在真的「結帳新增」的瞬間，這個 isNewOrder 才會是 true
+                      const isNewOrder = newOrderTraceId && record.traceId === newOrderTraceId;
                       
                       return (
-                        <div key={record.id || record.traceId} id={`record-${record.traceId}`} className={`px-6 py-4 flex justify-between items-start transition-all duration-500 ${isFocusedSearch ? 'bg-blue-500/20 ring-2 ring-blue-500 z-10' : isHighlightedOrder ? 'bg-yellow-500/20 ring-2 ring-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.3)]' : 'hover:bg-slate-800/10'}`}>
+                        <div key={record.id || record.traceId} id={`record-${record.traceId}`} className={`px-6 py-4 flex justify-between items-start transition-all duration-500 ${isFocusedSearch ? 'bg-blue-500/20 ring-2 ring-blue-500 z-10' : isNewOrder ? 'bg-yellow-500/20 ring-2 ring-yellow-500 shadow-[0_0_20px_rgba(234,179,8,0.3)]' : 'hover:bg-slate-800/10'}`}>
                           <div className="space-y-1.5 flex-1 pr-4">
                             <div className="text-[10px] font-black text-slate-600 flex items-center gap-3">
                               <span>{record.time || ''}</span>
                               {getPayBadge(record.paymentMethod)}
-                              {isHighlightedOrder && <span className="bg-yellow-500 text-black text-[8px] px-1.5 py-0.5 rounded animate-pulse">{isEditMode ? '剛剛修改' : '剛剛加入'}</span>}
+                              {isNewOrder && <span className="bg-yellow-500 text-black text-[8px] px-1.5 py-0.5 rounded animate-pulse">剛剛加入</span>}
                               {isFocusedSearch && <span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded">搜尋結果</span>}
                             </div>
                             <div className="text-xs font-medium text-slate-300 flex flex-wrap gap-1">
@@ -1537,7 +1547,6 @@ const App = () => {
                               </div>
                             )}
                             <div className="flex items-center gap-1 mt-1">
-                              {/* 編輯按鈕 */}
                               <button 
                                 onClick={(e) => { e.stopPropagation(); startEditingRecord(record); }} 
                                 className="text-slate-800 hover:text-blue-400 p-2 transition-colors active:scale-90 animate-in zoom-in duration-300" 
@@ -1545,7 +1554,6 @@ const App = () => {
                               >
                                 <Edit3 size={16} />
                               </button>
-                              {/* 刪除按鈕 */}
                               {isDeleteMode && (
                                 <button 
                                   onClick={(e) => { e.stopPropagation(); requestDeleteRecord(record.id); }} 
@@ -1590,7 +1598,6 @@ const App = () => {
         </div>
       )}
 
-      {/* --- 編輯清空確認對話框 --- */}
       {showEmptyEditPrompt && (
         <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[120] p-4 animate-in fade-in">
           <div className="bg-[#0e1630] border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-sm w-full">
