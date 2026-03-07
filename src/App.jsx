@@ -146,6 +146,8 @@ const App = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedDateJump, setSelectedDateJump] = useState(""); 
   const [isSummarizedView, setIsSummarizedView] = useState(false); 
+  // [修改2] 新增刪除模式狀態開關
+  const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [exportMonth, setExportMonth] = useState(() => {
     try { return new Date().toISOString().slice(0, 7); } catch(e) { return "2024-01"; }
   }); 
@@ -387,7 +389,8 @@ const App = () => {
             otherSum += ((it.price || 0) * (it.quantity || 1));
           } else {
             const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
-            if (!itemSummary[displayName]) itemSummary[displayName] = { count: 0, subtotal: 0 };
+            // [修改1] 在彙總時把原始名稱記錄下來，供後續排序使用
+            if (!itemSummary[displayName]) itemSummary[displayName] = { count: 0, subtotal: 0, originalName: it.name };
             itemSummary[displayName].count += (it.quantity || 1);
             itemSummary[displayName].subtotal += ((it.price || 0) * (it.quantity || 1));
           }
@@ -395,13 +398,21 @@ const App = () => {
       });
     });
     
-    Object.entries(itemSummary).forEach(([name, data]) => {
+    // [修改1] 將統計數量的項目轉換為陣列，並按照 allProducts 的 sortOrder 進行排序
+    const sortedItems = Object.entries(itemSummary).sort((a, b) => {
+      const itemA = (allProducts || []).find(p => p && p.name === a[1].originalName);
+      const itemB = (allProducts || []).find(p => p && p.name === b[1].originalName);
+      const orderA = itemA ? (itemA.sortOrder ?? 9999) : 9999;
+      const orderB = itemB ? (itemB.sortOrder ?? 9999) : 9999;
+      return orderA - orderB;
+    });
+
+    sortedItems.forEach(([name, data]) => {
       csv += `${name},${data?.count || 0},${data?.subtotal || 0}\n`;
     });
     if (otherSum !== 0) csv += `其他收入彙總,1,${otherSum}\n`;
     csv += "\n";
 
-    // --- [變更點] 建立一個新的陣列，將日期由舊到新（由上到下遞增）排序 ---
     const ascendingDaysList = [...(daysList || [])].sort((a, b) => new Date(a.date) - new Date(b.date));
 
     csv += "【 完整交易記錄 】\n交易日期,時間,金額,付款方式,內容,註\n";
@@ -436,18 +447,14 @@ const App = () => {
       }
     });
 
-    // --- 其他類別交易明細彙整 ---
     let otherTxnCsv = `【 附錄：其他類別交易明細 】\n交易日期,時間,金額,付款方式,備註\n`;
     let hasOtherTxns = false;
     
     ascendingDaysList.forEach(day => {
       (day?.records || []).forEach(record => {
-        // 篩選出包含「其他」類別的項目
         const otherItems = (record?.items || []).filter(it => it && it.category === '其他');
         if (otherItems.length > 0) {
-          // 計算該筆交易中屬於「其他」類別的總金額
           const totalOtherAmount = otherItems.reduce((sum, it) => sum + ((it.price || 0) * (it.quantity || 1)), 0);
-          // 確保備註內容如果包含逗號，在 CSV 中不會跑版
           const safeNote = record?.note ? `"${record.note.replace(/"/g, '""')}"` : '""';
           
           otherTxnCsv += `${day?.date || ''},${record?.time || ''},${totalOtherAmount},${record?.paymentMethod || '現金'},${safeNote}\n`;
@@ -456,7 +463,6 @@ const App = () => {
       });
     });
     
-    // 如果當月有其他交易，就把這個附錄加進報表的最底下
     if (hasOtherTxns) {
       csv += otherTxnCsv + "\n";
     }
@@ -500,13 +506,11 @@ const App = () => {
   const requestDeleteRecord = async (id) => {
     if (!id || !user) return;
     try {
-      // 樂觀更新：立刻隱藏，增加順暢度
       setLocalHiddenIds(prev => [...(prev || []), id]);
       setUndoItem(id); 
       if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
       undoTimerRef.current = setTimeout(() => setUndoItem(null), 4000);
       
-      // 背景更新資料庫
       await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sales', id), { isHidden: true });
     } catch (err) { console.error("刪除失敗", err); }
   };
@@ -564,17 +568,34 @@ const App = () => {
     processSyncQueue();
   };
 
-  // 自動捲動到最新訂單
+  // [修改3] 自動捲動到最新訂單，替換為客製化緩慢平滑滑動效果
   useEffect(() => {
     if (view === 'reports' && highlightedTraceId) {
       const scrollTimer = setTimeout(() => {
         if (typeof document !== 'undefined') {
           const element = document.getElementById(`record-${highlightedTraceId}`);
           if (element) {
-            element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const targetPosition = element.getBoundingClientRect().top + window.scrollY - (window.innerHeight / 2) + (element.offsetHeight / 2);
+            const startPosition = window.scrollY;
+            const distance = targetPosition - startPosition;
+            let startTime = null;
+            const duration = 1200; // 設定1.2秒，創造稍微慢一點優雅一點的視覺效果
+
+            const animation = (currentTime) => {
+              if (startTime === null) startTime = currentTime;
+              const timeElapsed = currentTime - startTime;
+              const progress = Math.min(timeElapsed / duration, 1);
+              // easeInOutQuad 貝茲曲線，開頭與結尾平滑降速
+              const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
+              window.scrollTo(0, startPosition + distance * ease);
+              if (timeElapsed < duration) {
+                requestAnimationFrame(animation);
+              }
+            };
+            requestAnimationFrame(animation);
           }
         }
-      }, 500); 
+      }, 300); // 稍微提早開始動畫讓連貫性更好
       return () => clearTimeout(scrollTimer);
     }
   }, [view, highlightedTraceId, currentPage]);
@@ -1123,7 +1144,17 @@ const App = () => {
         {view === 'reports' && (
           <div className="space-y-6 pb-20 animate-in fade-in duration-500">
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
-              <h2 className="text-2xl font-black text-white italic">銷售數據中心</h2>
+              <div className="flex items-center gap-4">
+                <h2 className="text-2xl font-black text-white italic">銷售數據中心</h2>
+                {/* [修改2] 刪除功能的總開關 */}
+                <button
+                  onClick={() => setIsDeleteMode(!isDeleteMode)}
+                  className={`flex items-center justify-center w-10 h-10 rounded-full transition-all duration-300 ${isDeleteMode ? 'bg-red-500 text-white shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-[#0e1630] border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'}`}
+                  title={isDeleteMode ? "關閉刪除模式" : "開啟刪除模式"}
+                >
+                  <Trash2 size={18} />
+                </button>
+              </div>
               <div className="flex items-center gap-3 w-full sm:w-auto">
                 <div className="relative">
                   <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500" />
@@ -1426,13 +1457,16 @@ const App = () => {
                                 )}
                               </div>
                             )}
-                            <button 
-                              onClick={(e) => { e.stopPropagation(); requestDeleteRecord(record.id); }} 
-                              className="text-slate-800 hover:text-red-500 p-2 transition-colors mt-1 active:scale-90" 
-                              title="移除記錄"
-                            >
-                              <Trash2 size={16} />
-                            </button>
+                            {/* [修改2] 只有在 isDeleteMode 開啟時才顯示垃圾桶 */}
+                            {isDeleteMode && (
+                              <button 
+                                onClick={(e) => { e.stopPropagation(); requestDeleteRecord(record.id); }} 
+                                className="text-slate-800 hover:text-red-500 p-2 transition-colors mt-1 active:scale-90 animate-in zoom-in duration-300" 
+                                title="移除記錄"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       );
