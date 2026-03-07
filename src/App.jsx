@@ -660,9 +660,13 @@ const App = () => {
               window.scrollTo(0, startPosition + distance * ease);
               if (timeElapsed < duration) {
                 requestAnimationFrame(animation);
+              } else {
+                setScrollTargetId(null); // 👉 動畫結束後把目標清除，避免切換頁面回來又重複滑動
               }
             };
             requestAnimationFrame(animation);
+          } else {
+            setScrollTargetId(null); // 👉 如果因為換頁找不到元素也提早清除，避免狀態卡住
           }
         }
       }, 300);
