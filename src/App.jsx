@@ -1250,7 +1250,7 @@ const App = () => {
                     type="month" 
                     value={exportMonth} 
                     onChange={(e) => setExportMonth(e.target.value)} 
-                    className="h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 outline-none focus:border-emerald-500 transition-all block box-border" 
+                    className="w-[140px] sm:w-[150px] h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 py-2 leading-normal outline-none focus:border-emerald-500 transition-all block box-border" 
                   />
                 </div>
                 <button 
@@ -1291,9 +1291,13 @@ const App = () => {
                   <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500 z-10" />
                   <input 
                     type="date" 
-                    className="w-full h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 block box-border" 
+                    className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 py-2 leading-normal text-xs text-white outline-none focus:border-yellow-500 block box-border" 
                     value={selectedDateJump} 
-                    onChange={(e) => { setSelectedDateJump(e.target.value); jumpToDate(e.target.value); }} 
+                    onChange={(e) => { 
+                      setSelectedDateJump(e.target.value); 
+                      jumpToDate(e.target.value); 
+                      e.target.blur(); // 修復選擇後焦點錯亂的問題
+                    }} 
                   />
                 </div>
                 
@@ -1630,8 +1634,18 @@ const App = () => {
         .custom-scrollbar::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 10px; }
         body { background-color: #070b1a; }
         mark { background-color: #eab308; color: black; padding: 0 2px; border-radius: 2px; }
-        input[type="date"]::-webkit-calendar-picker-indicator { background: transparent; bottom: 0; color: transparent; cursor: pointer; height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto; }
-        input[type="month"]::-webkit-calendar-picker-indicator { background: transparent; bottom: 0; color: transparent; cursor: pointer; height: auto; left: 0; position: absolute; right: 0; top: 0; width: auto; }
+        input[type="date"]::-webkit-calendar-picker-indicator,
+        input[type="month"]::-webkit-calendar-picker-indicator {
+          position: absolute;
+          left: 0;
+          top: 0;
+          width: 100%;
+          height: 100%;
+          margin: 0;
+          padding: 0;
+          opacity: 0;
+          cursor: pointer;
+        }
       `}</style>
     </div>
   );
