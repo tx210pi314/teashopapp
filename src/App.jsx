@@ -123,6 +123,13 @@ const App = () => {
   const [newPaymentName, setNewPaymentName] = useState(""); 
   const [newPaymentColor, setNewPaymentColor] = useState("yellow"); 
   
+  // --- 編輯功能相關狀態 ---
+  const [editingRecord, setEditingRecord] = useState(null);
+  const [editCart, setEditCart] = useState([]);
+  const [editNote, setEditNote] = useState("");
+  const [editPayment, setEditPayment] = useState("現金");
+  const [showEmptyEditPrompt, setShowEmptyEditPrompt] = useState(false);
+
   const [showMobileCart, setShowMobileCart] = useState(false);
   const [syncQueue, setSyncQueue] = useState(() => {
     try {
@@ -146,7 +153,6 @@ const App = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedDateJump, setSelectedDateJump] = useState(""); 
   const [isSummarizedView, setIsSummarizedView] = useState(false); 
-  // [修改2] 新增刪除模式狀態開關
   const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [exportMonth, setExportMonth] = useState(() => {
     try { return new Date().toISOString().slice(0, 7); } catch(e) { return "2024-01"; }
@@ -389,7 +395,6 @@ const App = () => {
             otherSum += ((it.price || 0) * (it.quantity || 1));
           } else {
             const displayName = it.category ? `[${it.category}] ${it.name}` : it.name;
-            // [修改1] 在彙總時把原始名稱記錄下來，供後續排序使用
             if (!itemSummary[displayName]) itemSummary[displayName] = { count: 0, subtotal: 0, originalName: it.name };
             itemSummary[displayName].count += (it.quantity || 1);
             itemSummary[displayName].subtotal += ((it.price || 0) * (it.quantity || 1));
@@ -398,7 +403,6 @@ const App = () => {
       });
     });
     
-    // [修改1] 將統計數量的項目轉換為陣列，並按照 allProducts 的 sortOrder 進行排序
     const sortedItems = Object.entries(itemSummary).sort((a, b) => {
       const itemA = (allProducts || []).find(p => p && p.name === a[1].originalName);
       const itemB = (allProducts || []).find(p => p && p.name === b[1].originalName);
@@ -568,7 +572,64 @@ const App = () => {
     processSyncQueue();
   };
 
-  // [修改3] 自動捲動到最新訂單，替換為客製化緩慢平滑滑動效果
+  // --- 編輯專用邏輯 ---
+  const startEditingRecord = (record) => {
+    setEditingRecord(record);
+    // 使用深度拷貝預載原本內容，確保不會意外改動到外部狀態
+    setEditCart(JSON.parse(JSON.stringify(record.items || [])));
+    setEditNote(record.note || "");
+    setEditPayment(record.paymentMethod || "現金");
+    setView('edit');
+  };
+
+  const cancelEditing = () => {
+    setEditingRecord(null);
+    setEditCart([]);
+    setEditNote("");
+    setEditPayment("現金");
+    setShowMobileCart(false);
+    setView('reports');
+  };
+
+  const handleEditComplete = async () => {
+    // 若清空購物車，跳出確認對話框
+    if (!editCart || editCart.length === 0) {
+      setShowEmptyEditPrompt(true);
+      return;
+    }
+    if (!user || !editingRecord) return;
+    
+    try {
+      const updatedTotal = editCart.reduce((s, i) => s + ((i?.price || 0) * (i?.quantity || 1)), 0);
+      await updateDoc(doc(db, 'artifacts', appId, 'public', 'data', 'sales', editingRecord.id), {
+        items: editCart.map(i => ({
+          name: i?.name || '未知',
+          price: i?.price || 0,
+          quantity: i?.quantity || 1,
+          category: i?.category || '其他'
+        })),
+        total: updatedTotal,
+        note: editNote,
+        paymentMethod: editPayment,
+        // 注意：這裡不更新 time 和 fullDate，保留原始的交易時間
+        updatedAt: serverTimestamp()
+      });
+      setHighlightedTraceId(editingRecord.traceId);
+      cancelEditing();
+    } catch (err) { console.error("更新失敗", err); }
+  };
+
+  // 統一參數化點單與編輯共用的變數
+  const isEditMode = view === 'edit';
+  const displayCart = isEditMode ? editCart : currentSale;
+  const setDisplayCart = isEditMode ? setEditCart : setCurrentSale;
+  const displayNote = isEditMode ? editNote : dailyNote;
+  const setDisplayNote = isEditMode ? setEditNote : setDailyNote;
+  const displayPayment = isEditMode ? editPayment : selectedPayment;
+  const setDisplayPayment = isEditMode ? setEditPayment : setSelectedPayment;
+  const displayTotal = (displayCart || []).reduce((s, i) => s + ((i?.price || 0) * (i?.quantity || 1)), 0);
+
+  // 自動捲動到最新或修改後的訂單
   useEffect(() => {
     if (view === 'reports' && highlightedTraceId) {
       const scrollTimer = setTimeout(() => {
@@ -579,13 +640,12 @@ const App = () => {
             const startPosition = window.scrollY;
             const distance = targetPosition - startPosition;
             let startTime = null;
-            const duration = 1200; // 設定1.2秒，創造稍微慢一點優雅一點的視覺效果
+            const duration = 1200;
 
             const animation = (currentTime) => {
               if (startTime === null) startTime = currentTime;
               const timeElapsed = currentTime - startTime;
               const progress = Math.min(timeElapsed / duration, 1);
-              // easeInOutQuad 貝茲曲線，開頭與結尾平滑降速
               const ease = progress < 0.5 ? 2 * progress * progress : 1 - Math.pow(-2 * progress + 2, 2) / 2;
               window.scrollTo(0, startPosition + distance * ease);
               if (timeElapsed < duration) {
@@ -595,7 +655,7 @@ const App = () => {
             requestAnimationFrame(animation);
           }
         }
-      }, 300); // 稍微提早開始動畫讓連貫性更好
+      }, 300);
       return () => clearTimeout(scrollTimer);
     }
   }, [view, highlightedTraceId, currentPage]);
@@ -694,18 +754,16 @@ const App = () => {
     } catch (err) { console.error(err); }
   };
 
-  const cartTotal = (currentSale || []).reduce((s, i) => s + ((i?.price || 0) * (i?.quantity || 1)), 0);
-
   const getPayColorClass = (methodName, isActive = false) => {
     const method = (allPaymentMethods || []).find(m => m?.name === methodName);
     const color = method ? method.color : 'yellow';
     const colorMap = { 
-      yellow: isActive ? 'bg-yellow-500 border-yellow-500 text-black' : 'border-slate-800 text-slate-400', 
-      emerald: isActive ? 'bg-emerald-500 border-emerald-500 text-black' : 'border-slate-800 text-slate-400', 
-      blue: isActive ? 'bg-blue-500 border-blue-500 text-black' : 'border-slate-800 text-slate-400', 
-      purple: isActive ? 'bg-purple-500 border-purple-500 text-black' : 'border-slate-800 text-slate-400', 
-      rose: isActive ? 'bg-rose-500 border-rose-500 text-black' : 'border-slate-800 text-slate-400', 
-      cyan: isActive ? 'bg-cyan-500 border-cyan-500 text-black' : 'border-slate-800 text-slate-400' 
+      yellow: isActive ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white' : 'bg-yellow-500 border-yellow-500 text-black') : 'border-slate-800 text-slate-400', 
+      emerald: isActive ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white' : 'bg-emerald-500 border-emerald-500 text-black') : 'border-slate-800 text-slate-400', 
+      blue: isActive ? 'bg-blue-500 border-blue-500 text-white' : 'border-slate-800 text-slate-400', 
+      purple: isActive ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white' : 'bg-purple-500 border-purple-500 text-black') : 'border-slate-800 text-slate-400', 
+      rose: isActive ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white' : 'bg-rose-500 border-rose-500 text-black') : 'border-slate-800 text-slate-400', 
+      cyan: isActive ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white' : 'bg-cyan-500 border-cyan-500 text-black') : 'border-slate-800 text-slate-400' 
     };
     return colorMap[color] || colorMap.yellow;
   };
@@ -790,8 +848,11 @@ const App = () => {
             {['sales', 'inventory', 'reports'].map(v => (
               <button 
                 key={v} 
-                onClick={() => setView(v)} 
-                className={`px-3 md:px-5 py-1.5 rounded-full text-[10px] md:text-xs font-bold transition-all ${view === v ? 'bg-yellow-500 text-black shadow-md' : 'text-slate-500 hover:text-white'}`}
+                onClick={() => {
+                  if (view === 'edit') cancelEditing();
+                  setView(v);
+                }} 
+                className={`px-3 md:px-5 py-1.5 rounded-full text-[10px] md:text-xs font-bold transition-all ${(view === v || (view === 'edit' && v === 'reports')) ? 'bg-yellow-500 text-black shadow-md' : 'text-slate-500 hover:text-white'}`}
               >
                 {v === 'sales' ? '點單' : v === 'inventory' ? '品項' : '報表'}
               </button>
@@ -801,7 +862,8 @@ const App = () => {
       </nav>
 
       <main className="p-3 md:p-8 max-w-7xl mx-auto">
-        {view === 'sales' && (
+        {/* 把 view === 'sales' 替換為 (view === 'sales' || view === 'edit')，讓兩種模式共用相同元件 */}
+        {(view === 'sales' || view === 'edit') && (
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-8 space-y-6">
               <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar -mx-3 px-3 py-2 sticky top-[62px] z-40 bg-[#070b1a]/95 backdrop-blur-md">
@@ -809,7 +871,7 @@ const App = () => {
                   <button 
                     key={cat} 
                     onClick={() => setActiveCategory(cat)} 
-                    className={`px-5 py-2 rounded-xl text-[11px] font-black border transition-all whitespace-nowrap ${activeCategory === cat ? 'bg-yellow-500 border-yellow-500 text-black shadow-lg shadow-yellow-500/20' : 'bg-[#0e1630] border-slate-800 text-slate-400'}`}
+                    className={`px-5 py-2 rounded-xl text-[11px] font-black border transition-all whitespace-nowrap ${activeCategory === cat ? (isEditMode ? 'bg-blue-500 border-blue-500 text-white shadow-lg shadow-blue-500/20' : 'bg-yellow-500 border-yellow-500 text-black shadow-lg shadow-yellow-500/20') : 'bg-[#0e1630] border-slate-800 text-slate-400'}`}
                   >
                     {cat}
                   </button>
@@ -820,17 +882,17 @@ const App = () => {
                   <button 
                     key={p.id} 
                     onClick={() => {
-                      const ex = (currentSale || []).find(i => i?.name === p.name);
-                      if(ex) setCurrentSale((currentSale || []).map(i => i?.name === p.name ? {...i, quantity: (i.quantity || 1) + 1} : i));
-                      else setCurrentSale([...(currentSale || []), {...p, quantity: 1}]);
+                      const ex = (displayCart || []).find(i => i?.name === p.name);
+                      if(ex) setDisplayCart((displayCart || []).map(i => i?.name === p.name ? {...i, quantity: (i.quantity || 1) + 1} : i));
+                      else setDisplayCart([...(displayCart || []), {...p, quantity: 1}]);
                     }} 
-                    className="p-4 bg-[#0e1630] border border-slate-800 rounded-2xl text-left lg:hover:border-yellow-500 active:scale-95 transition-all group"
+                    className={`p-4 bg-[#0e1630] border border-slate-800 rounded-2xl text-left active:scale-95 transition-all group ${isEditMode ? 'lg:hover:border-blue-500' : 'lg:hover:border-yellow-500'}`}
                   >
                     <div className="text-[9px] text-slate-500 uppercase font-black">{p.category}</div>
                     <div className="font-bold text-sm h-10 mt-1 text-white line-clamp-2">{p.name}</div>
                     <div className="mt-3 flex justify-between items-center">
-                      <span className="font-black text-yellow-500">${p.price}</span>
-                      <Plus size={14} className="text-slate-600 group-hover:text-yellow-500" />
+                      <span className={`font-black ${isEditMode ? 'text-blue-400' : 'text-yellow-500'}`}>${p.price}</span>
+                      <Plus size={14} className={`text-slate-600 ${isEditMode ? 'group-hover:text-blue-400' : 'group-hover:text-yellow-500'}`} />
                     </div>
                   </button>
                 ))}
@@ -839,22 +901,23 @@ const App = () => {
 
             <div className="hidden lg:block lg:col-span-4">
               <div className="bg-[#0e1630] border border-slate-800 rounded-3xl p-6 sticky top-24 shadow-2xl h-[calc(100vh-140px)] flex flex-col">
-                <h2 className="text-xs font-bold text-slate-500 mb-6 flex items-center gap-2 uppercase tracking-widest">
-                  <ClipboardList size={18} className="text-yellow-500" /> 當前訂單
+                <h2 className={`text-xs font-bold mb-6 flex items-center gap-2 uppercase tracking-widest ${isEditMode ? 'text-blue-400' : 'text-slate-500'}`}>
+                  <ClipboardList size={18} className={isEditMode ? 'text-blue-500' : 'text-yellow-500'} /> 
+                  {isEditMode ? '編輯訂單內容' : '當前訂單'}
                 </h2>
                 <div className="flex-1 overflow-y-auto space-y-4 pr-2 custom-scrollbar">
-                  {(!currentSale || currentSale.length === 0) ? (
-                    <div className="py-10 text-center text-slate-700 text-sm italic">點擊左側品項開始</div>
+                  {(!displayCart || displayCart.length === 0) ? (
+                    <div className="py-10 text-center text-slate-700 text-sm italic">{isEditMode ? '訂單已清空' : '點擊左側品項開始'}</div>
                   ) : (
-                    currentSale.map((item, idx) => (
+                    displayCart.map((item, idx) => (
                       <div key={idx} className="flex justify-between items-center">
                         <div>
                           <div className="text-sm font-bold text-white">{item?.name}</div>
                           <div className="text-xs text-slate-500">${item?.price} × {item?.quantity}</div>
                         </div>
                         <div className="flex items-center gap-4">
-                          <div className="text-sm font-black text-yellow-500">${(item?.price || 0) * (item?.quantity || 1)}</div>
-                          <button onClick={() => setCurrentSale((currentSale || []).filter((_, i) => i !== idx))} className="text-slate-800 hover:text-red-400 p-1">
+                          <div className={`text-sm font-black ${isEditMode ? 'text-blue-400' : 'text-yellow-500'}`}>${(item?.price || 0) * (item?.quantity || 1)}</div>
+                          <button onClick={() => setDisplayCart((displayCart || []).filter((_, i) => i !== idx))} className="text-slate-800 hover:text-red-400 p-1">
                             <X size={14} />
                           </button>
                         </div>
@@ -869,8 +932,8 @@ const App = () => {
                       {(allPaymentMethods || []).map(m => (
                         <button 
                           key={m.name} 
-                          onClick={() => setSelectedPayment(m.name)} 
-                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${getPayColorClass(m.name, selectedPayment === m.name)}`}
+                          onClick={() => setDisplayPayment(m.name)} 
+                          className={`px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-all ${getPayColorClass(m.name, displayPayment === m.name)}`}
                         >
                           {m.name}
                         </button>
@@ -878,37 +941,46 @@ const App = () => {
                     </div>
                   </div>
                   <textarea 
-                    value={dailyNote} 
-                    onChange={e => setDailyNote(e.target.value)} 
+                    value={displayNote} 
+                    onChange={e => setDisplayNote(e.target.value)} 
                     placeholder="備註…" 
                     className="w-full bg-[#070b1a] border border-slate-800 rounded-xl p-3 text-xs text-slate-300 h-16 outline-none" 
                   />
                   <div className="flex justify-between items-end">
                     <span className="text-xs text-slate-500 font-bold uppercase">總計</span>
-                    <span className="text-4xl font-black text-white tracking-tighter">${cartTotal}</span>
+                    <span className="text-4xl font-black text-white tracking-tighter">${displayTotal}</span>
                   </div>
-                  <button 
-                    onClick={checkout} 
-                    disabled={!currentSale || currentSale.length === 0} 
-                    className="w-full py-4 rounded-2xl bg-yellow-500 text-black font-black hover:bg-yellow-400 disabled:bg-slate-800 transition-all flex justify-center items-center gap-2"
-                  >
-                    確認結帳
-                  </button>
+                  {isEditMode ? (
+                    <div className="flex gap-2">
+                      <button onClick={cancelEditing} className="w-1/3 py-4 rounded-2xl bg-slate-800 text-white font-black hover:bg-slate-700 transition-all">取消</button>
+                      <button onClick={handleEditComplete} className="flex-1 py-4 rounded-2xl bg-blue-500 text-white font-black hover:bg-blue-400 transition-all flex justify-center items-center gap-2">
+                        修改完成
+                      </button>
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={checkout} 
+                      disabled={!displayCart || displayCart.length === 0} 
+                      className="w-full py-4 rounded-2xl bg-yellow-500 text-black font-black hover:bg-yellow-400 disabled:bg-slate-800 transition-all flex justify-center items-center gap-2"
+                    >
+                      確認結帳
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {view === 'sales' && currentSale && currentSale.length > 0 && (
+        {(view === 'sales' || view === 'edit') && displayCart && displayCart.length > 0 && (
           <button 
             onClick={() => setShowMobileCart(true)} 
-            className="lg:hidden fixed bottom-10 right-6 w-16 h-16 bg-yellow-500 rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.5)] flex items-center justify-center text-black z-[99] animate-bounce active:scale-90 transition-transform"
+            className={`lg:hidden fixed bottom-10 right-6 w-16 h-16 ${isEditMode ? 'bg-blue-500' : 'bg-yellow-500'} rounded-full shadow-[0_10px_30px_rgba(0,0,0,0.5)] flex items-center justify-center text-black z-[99] animate-bounce active:scale-90 transition-transform`}
           >
             <div className="relative">
-              <ShoppingCart size={28} />
-              <span className="absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full border-2 border-yellow-500">
-                {(currentSale || []).reduce((s, i) => s + (i?.quantity || 1), 0)}
+              <ShoppingCart size={28} className={isEditMode ? 'text-white' : 'text-black'} />
+              <span className={`absolute -top-2 -right-2 bg-red-600 text-white text-[10px] font-black px-1.5 py-0.5 rounded-full border-2 ${isEditMode ? 'border-blue-500' : 'border-yellow-500'}`}>
+                {(displayCart || []).reduce((s, i) => s + (i?.quantity || 1), 0)}
               </span>
             </div>
           </button>
@@ -919,7 +991,8 @@ const App = () => {
             <div className="absolute bottom-0 left-0 right-0 bg-[#0e1630] rounded-t-[40px] p-4 max-h-[98vh] flex flex-col border-t border-slate-800 shadow-[0_-20px_50px_rgba(0,0,0,0.5)]">
               <div className="flex justify-between items-center mb-3">
                 <h2 className="text-base font-black text-white flex items-center gap-2">
-                  <ShoppingCart size={18} className="text-yellow-500" /> 點單確認 ({(currentSale || []).length})
+                  <ShoppingCart size={18} className={isEditMode ? 'text-blue-500' : 'text-yellow-500'} /> 
+                  {isEditMode ? '編輯確認' : '點單確認'} ({(displayCart || []).length})
                 </h2>
                 <button onClick={() => setShowMobileCart(false)} className="w-8 h-8 bg-slate-800 rounded-full flex items-center justify-center text-slate-400">
                   <X size={18} />
@@ -927,15 +1000,15 @@ const App = () => {
               </div>
               
               <div className="flex-1 overflow-y-auto space-y-1.5 mb-3 pr-1 custom-scrollbar">
-                {(currentSale || []).map((item, idx) => (
+                {(displayCart || []).map((item, idx) => (
                   <div key={idx} className="flex justify-between items-center bg-[#070b1a] py-1.5 px-3 rounded-xl border border-slate-800/50">
                     <div className="flex-1 min-w-0 pr-2">
                       <div className="text-base font-bold text-white truncate leading-tight">{item?.name}</div>
                       <div className="text-[10px] text-slate-500 font-bold">${item?.price} × {item?.quantity}</div>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
-                      <div className="text-lg font-black text-yellow-500 tracking-tighter">${(item?.price || 0) * (item?.quantity || 1)}</div>
-                      <button onClick={() => setCurrentSale((currentSale || []).filter((_, i) => i !== idx))} className="text-red-500/40 p-2 active:text-red-500">
+                      <div className={`text-lg font-black tracking-tighter ${isEditMode ? 'text-blue-400' : 'text-yellow-500'}`}>${(item?.price || 0) * (item?.quantity || 1)}</div>
+                      <button onClick={() => setDisplayCart((displayCart || []).filter((_, i) => i !== idx))} className="text-red-500/40 p-2 active:text-red-500">
                         <Trash2 size={16} />
                       </button>
                     </div>
@@ -950,8 +1023,8 @@ const App = () => {
                     {(allPaymentMethods || []).map(m => (
                       <button 
                         key={m.name} 
-                        onClick={() => setSelectedPayment(m.name)} 
-                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap border transition-all ${getPayColorClass(m.name, selectedPayment === m.name)}`}
+                        onClick={() => setDisplayPayment(m.name)} 
+                        className={`px-2.5 py-1 rounded-lg text-[10px] font-bold whitespace-nowrap border transition-all ${getPayColorClass(m.name, displayPayment === m.name)}`}
                       >
                         {m.name}
                       </button>
@@ -961,24 +1034,31 @@ const App = () => {
                 
                 <div className="flex gap-2 items-center">
                   <textarea 
-                    value={dailyNote} 
-                    onChange={e => setDailyNote(e.target.value)} 
+                    value={displayNote} 
+                    onChange={e => setDisplayNote(e.target.value)} 
                     placeholder="備註…" 
                     className="flex-1 bg-[#070b1a] border border-slate-800 rounded-xl p-2 text-[10px] text-slate-400 h-10 outline-none resize-none" 
                   />
                   <div className="text-right shrink-0 min-w-[80px]">
                     <span className="text-slate-500 font-bold uppercase text-[9px] block mb-0.5">應收總計</span>
-                    <span className="text-xl font-black text-white leading-none">${cartTotal}</span>
+                    <span className="text-xl font-black text-white leading-none">${displayTotal}</span>
                   </div>
                 </div>
                 
-                <button 
-                  onClick={checkout} 
-                  disabled={!currentSale || currentSale.length === 0} 
-                  className="w-full py-3 rounded-xl bg-yellow-500 text-black font-black text-sm active:scale-[0.98] transition-all shadow-lg shadow-yellow-500/5"
-                >
-                  確認送出訂單
-                </button>
+                {isEditMode ? (
+                  <div className="flex gap-2">
+                    <button onClick={cancelEditing} className="w-1/3 py-3 rounded-xl bg-slate-800 text-white font-black text-sm active:scale-[0.98] transition-all">取消</button>
+                    <button onClick={handleEditComplete} className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-black text-sm active:scale-[0.98] transition-all shadow-lg shadow-blue-500/5">修改完成</button>
+                  </div>
+                ) : (
+                  <button 
+                    onClick={checkout} 
+                    disabled={!displayCart || displayCart.length === 0} 
+                    className="w-full py-3 rounded-xl bg-yellow-500 text-black font-black text-sm active:scale-[0.98] transition-all shadow-lg shadow-yellow-500/5"
+                  >
+                    確認送出訂單
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -1146,7 +1226,6 @@ const App = () => {
             <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
               <div className="flex items-center gap-4">
                 <h2 className="text-2xl font-black text-white italic">銷售數據中心</h2>
-                {/* [修改2] 刪除功能的總開關 */}
                 <button
                   onClick={() => setIsDeleteMode(!isDeleteMode)}
                   className={`flex items-center justify-center w-10 h-10 rounded-full transition-all duration-300 ${isDeleteMode ? 'bg-red-500 text-white shadow-[0_0_15px_rgba(239,68,68,0.5)]' : 'bg-[#0e1630] border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800'}`}
@@ -1424,7 +1503,7 @@ const App = () => {
                             <div className="text-[10px] font-black text-slate-600 flex items-center gap-3">
                               <span>{record.time || ''}</span>
                               {getPayBadge(record.paymentMethod)}
-                              {isHighlightedOrder && <span className="bg-yellow-500 text-black text-[8px] px-1.5 py-0.5 rounded animate-pulse">剛剛加入</span>}
+                              {isHighlightedOrder && <span className="bg-yellow-500 text-black text-[8px] px-1.5 py-0.5 rounded animate-pulse">{isEditMode ? '剛剛修改' : '剛剛加入'}</span>}
                               {isFocusedSearch && <span className="bg-blue-500 text-white text-[8px] px-1.5 py-0.5 rounded">搜尋結果</span>}
                             </div>
                             <div className="text-xs font-medium text-slate-300 flex flex-wrap gap-1">
@@ -1457,16 +1536,26 @@ const App = () => {
                                 )}
                               </div>
                             )}
-                            {/* [修改2] 只有在 isDeleteMode 開啟時才顯示垃圾桶 */}
-                            {isDeleteMode && (
+                            <div className="flex items-center gap-1 mt-1">
+                              {/* 編輯按鈕 */}
                               <button 
-                                onClick={(e) => { e.stopPropagation(); requestDeleteRecord(record.id); }} 
-                                className="text-slate-800 hover:text-red-500 p-2 transition-colors mt-1 active:scale-90 animate-in zoom-in duration-300" 
-                                title="移除記錄"
+                                onClick={(e) => { e.stopPropagation(); startEditingRecord(record); }} 
+                                className="text-slate-800 hover:text-blue-400 p-2 transition-colors active:scale-90 animate-in zoom-in duration-300" 
+                                title="編輯記錄"
                               >
-                                <Trash2 size={16} />
+                                <Edit3 size={16} />
                               </button>
-                            )}
+                              {/* 刪除按鈕 */}
+                              {isDeleteMode && (
+                                <button 
+                                  onClick={(e) => { e.stopPropagation(); requestDeleteRecord(record.id); }} 
+                                  className="text-slate-800 hover:text-red-500 p-2 transition-colors active:scale-90 animate-in zoom-in duration-300" 
+                                  title="移除記錄"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              )}
+                            </div>
                           </div>
                         </div>
                       );
@@ -1494,8 +1583,31 @@ const App = () => {
             <h3 className="text-xl font-bold text-white mb-4">確認刪除品項</h3>
             <p className="text-slate-400 mb-6">確定將「<span className="text-yellow-500">{productToDelete.name}</span>」從選單中刪除嗎？</p>
             <div className="flex justify-end gap-3">
-              <button onClick={() => setProductToDelete(null)} className="px-5 py-2 text-slate-400 font-bold">取消</button>
-              <button onClick={confirmDelete} className="px-5 py-2 bg-red-500 text-white rounded-xl font-bold">確定刪除</button>
+              <button onClick={() => setProductToDelete(null)} className="px-5 py-2 text-slate-400 font-bold hover:text-white transition-colors">取消</button>
+              <button onClick={confirmDelete} className="px-5 py-2 bg-red-500 text-white rounded-xl font-bold hover:bg-red-400 transition-colors">確定刪除</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- 編輯清空確認對話框 --- */}
+      {showEmptyEditPrompt && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[120] p-4 animate-in fade-in">
+          <div className="bg-[#0e1630] border border-slate-800 p-6 rounded-3xl shadow-2xl max-w-sm w-full">
+            <h3 className="text-xl font-bold text-white mb-4">確定刪除此紀錄？</h3>
+            <p className="text-slate-400 mb-6">因訂單內容已全部清空，若繼續修改將刪除此筆交易記錄。</p>
+            <div className="flex justify-end gap-3">
+              <button onClick={() => setShowEmptyEditPrompt(false)} className="px-5 py-2 text-slate-400 font-bold hover:text-white transition-colors">取消</button>
+              <button 
+                onClick={() => {
+                  setShowEmptyEditPrompt(false);
+                  requestDeleteRecord(editingRecord.id);
+                  cancelEditing();
+                }} 
+                className="px-5 py-2 bg-red-500 text-white rounded-xl font-bold hover:bg-red-400 transition-colors"
+              >
+                是
+              </button>
             </div>
           </div>
         </div>
