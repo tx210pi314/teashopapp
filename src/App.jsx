@@ -153,10 +153,14 @@ const App = () => {
   
   const [searchQuery, setSearchQuery] = useState("");
   const [currentSearchIndex, setCurrentSearchIndex] = useState(-1);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [selectedDateJump, setSelectedDateJump] = useState(""); 
+    const [currentPage, setCurrentPage] = useState(1);
+  const [selectedDateJump, setSelectedDateJump] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }); 
   const [isSummarizedView, setIsSummarizedView] = useState(false); 
-  const [isDeleteMode, setIsDeleteMode] = useState(false);
+
+ const [isDeleteMode, setIsDeleteMode] = useState(false);
   const [exportMonth, setExportMonth] = useState(() => {
     try { return new Date().toISOString().slice(0, 7); } catch(e) { return "2024-01"; }
   }); 
@@ -1292,16 +1296,20 @@ const App = () => {
                   {isSummarizedView ? '統計帳務' : '統計數量'}
                 </button>
                 
-                                  <div className="relative flex-1 sm:w-40">
+                                                  <div className="relative flex-1 sm:w-40">
                   <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500 z-10" />
                   <input 
                     type="date" 
                     className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 py-0 leading-[40px] appearance-none text-xs text-white outline-none focus:border-yellow-500 block box-border" 
                     value={selectedDateJump} 
                     onChange={(e) => { 
-                      setSelectedDateJump(e.target.value); 
-                      jumpToDate(e.target.value); 
-                      e.target.blur(); // 修復選擇後焦點錯亂的問題
+                      const newVal = e.target.value;
+                      // 只有當真的有選日期，而且跟目前欄位內的日期不同時，才執行滑動和收起
+                      if (newVal && newVal !== selectedDateJump) {
+                        setSelectedDateJump(newVal); 
+                        jumpToDate(newVal); 
+                        e.target.blur(); 
+                      }
                     }} 
                   />
                 </div>
