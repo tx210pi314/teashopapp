@@ -1244,13 +1244,13 @@ const App = () => {
                 </button>
               </div>
               <div className="flex items-center gap-3 w-full sm:w-auto">
-                <div className="relative">
+                               <div className="relative">
                   <Calendar size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-emerald-500 z-10" />
                   <input 
                     type="month" 
                     value={exportMonth} 
                     onChange={(e) => setExportMonth(e.target.value)} 
-                    className="w-[140px] sm:w-[150px] h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 outline-none focus:border-emerald-500 transition-all block box-border" 
+                    className="w-[140px] sm:w-[150px] h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 py-0 leading-[40px] appearance-none outline-none focus:border-emerald-500 transition-all block box-border" 
                   />
                 </div>
 
@@ -1288,11 +1288,11 @@ const App = () => {
                   {isSummarizedView ? '統計帳務' : '統計數量'}
                 </button>
                 
-                   <div className="relative flex-1 sm:w-40">
+                                  <div className="relative flex-1 sm:w-40">
                   <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500 z-10" />
                   <input 
                     type="date" 
-                    className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 block box-border" 
+                    className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 py-0 leading-[40px] appearance-none text-xs text-white outline-none focus:border-yellow-500 block box-border" 
                     value={selectedDateJump} 
                     onChange={(e) => { 
                       setSelectedDateJump(e.target.value); 
