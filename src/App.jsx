@@ -1250,9 +1250,10 @@ const App = () => {
                     type="month" 
                     value={exportMonth} 
                     onChange={(e) => setExportMonth(e.target.value)} 
-                    className="w-[140px] sm:w-[150px] h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 py-2 leading-normal outline-none focus:border-emerald-500 transition-all block box-border" 
+                    className="w-[140px] sm:w-[150px] h-[42px] bg-[#0e1630] border border-slate-800 text-slate-300 text-xs font-bold rounded-xl pl-9 pr-3 outline-none focus:border-emerald-500 transition-all block box-border" 
                   />
                 </div>
+
                 <button 
                   onClick={exportMonthlyReport} 
                   className="flex-1 sm:flex-none h-[42px] bg-emerald-600 text-white px-5 rounded-xl font-bold flex items-center justify-center gap-2 text-xs shadow-lg shadow-emerald-500/10 hover:bg-emerald-500 transition-all box-border"
@@ -1287,11 +1288,11 @@ const App = () => {
                   {isSummarizedView ? '統計帳務' : '統計數量'}
                 </button>
                 
-                <div className="relative flex-1 sm:w-40">
+                   <div className="relative flex-1 sm:w-40">
                   <Calendar size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-yellow-500 z-10" />
                   <input 
                     type="date" 
-                    className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 py-2 leading-normal text-xs text-white outline-none focus:border-yellow-500 block box-border" 
+                    className="w-full sm:w-[140px] h-[42px] bg-[#070b1a] border border-slate-800 rounded-xl pl-10 pr-3 text-xs text-white outline-none focus:border-yellow-500 block box-border" 
                     value={selectedDateJump} 
                     onChange={(e) => { 
                       setSelectedDateJump(e.target.value); 
@@ -1300,7 +1301,7 @@ const App = () => {
                     }} 
                   />
                 </div>
-                
+
                 {(searchMatches || []).length > 0 && (
                   <div className="flex items-center h-[42px] gap-2 bg-[#070b1a] px-3 rounded-xl border border-slate-800 shrink-0 box-border">
                     <span className="text-[10px] font-black text-yellow-500 uppercase tracking-tighter">{currentSearchIndex + 1} / {searchMatches.length}</span>
